@@ -1,31 +1,59 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 function App() {
-  const [books, setBooks] = useState([]);
+  const [file, setFile] = useState(null);
+  const [message, setMessage] = useState("");
+  const [uploadedUrl, setUploadedUrl] = useState("");
 
-  useEffect(() => {
-    fetch("http://localhost:5000/books")
-      .then((res) => res.json())
-      .then((data) => setBooks(data))
-      .catch((err) => console.log(err));
-  }, []);
+  const handleUpload = async () => {
+    if (!file) {
+      setMessage("Please choose a file first.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("book", file);
+
+    try {
+      const response = await fetch("http://localhost:5000/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      setMessage(data.message || "Upload finished");
+      setUploadedUrl(data.url || "");
+    } catch (error) {
+      console.error(error);
+      setMessage("Upload failed");
+    }
+  };
 
   return (
-    <div style={{ padding: "30px", fontFamily: "Arial" }}>
+    <div style={{ padding: "40px", fontFamily: "Arial" }}>
       <h1>Online Reader</h1>
-      <p>Upload and read books online.</p>
+      <p>Upload and store books online.</p>
 
-      <h2>Books</h2>
-      {books.length === 0 ? (
-        <p>No books loaded yet.</p>
-      ) : (
-        <ul>
-          {books.map((book) => (
-            <li key={book.id}>
-              {book.title} - {book.author}
-            </li>
-          ))}
-        </ul>
+      <input
+        type="file"
+        accept=".epub,.pdf"
+        onChange={(e) => setFile(e.target.files[0])}
+      />
+
+      <div style={{ marginTop: "20px" }}>
+        <button onClick={handleUpload}>Upload Book</button>
+      </div>
+
+      <p style={{ marginTop: "20px" }}>{message}</p>
+
+      {uploadedUrl && (
+        <p>
+          Uploaded file:{" "}
+          <a href={uploadedUrl} target="_blank" rel="noreferrer">
+            Open book
+          </a>
+        </p>
       )}
     </div>
   );

@@ -1,59 +1,125 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import EpubReader from "./EpubReader";
 
 function App() {
-  const [file, setFile] = useState(null);
-  const [message, setMessage] = useState("");
-  const [uploadedUrl, setUploadedUrl] = useState("");
+  const [books, setBooks] = useState([]);
+  const [selectedBook, setSelectedBook] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const handleUpload = async () => {
-    if (!file) {
-      setMessage("Please choose a file first.");
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("book", file);
-
+  const loadBooks = async () => {
     try {
-      const response = await fetch("http://localhost:5000/upload", {
-        method: "POST",
-        body: formData,
-      });
+      setLoading(true);
+      setError("");
+
+      const response = await fetch("http://localhost:5000/books");
+      if (!response.ok) {
+        throw new Error("Failed to load books");
+      }
 
       const data = await response.json();
-
-      setMessage(data.message || "Upload finished");
-      setUploadedUrl(data.url || "");
-    } catch (error) {
-      console.error(error);
-      setMessage("Upload failed");
+      setBooks(data);
+    } catch (err) {
+      console.error(err);
+      setError("Could not load books from backend.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  return (
-    <div style={{ padding: "40px", fontFamily: "Arial" }}>
-      <h1>Online Reader</h1>
-      <p>Upload and store books online.</p>
+  useEffect(() => {
+    loadBooks();
+  }, []);
 
-      <input
-        type="file"
-        accept=".epub,.pdf"
-        onChange={(e) => setFile(e.target.files[0])}
-      />
-
-      <div style={{ marginTop: "20px" }}>
-        <button onClick={handleUpload}>Upload Book</button>
+  if (loading) {
+    return (
+      <div style={{ padding: "30px", fontFamily: "Arial" }}>
+        <h1>Online Reader</h1>
+        <p>Loading books...</p>
       </div>
+    );
+  }
 
-      <p style={{ marginTop: "20px" }}>{message}</p>
+  if (error) {
+    return (
+      <div style={{ padding: "30px", fontFamily: "Arial" }}>
+        <h1>Online Reader</h1>
+        <p>{error}</p>
+        <button onClick={loadBooks}>Try again</button>
+      </div>
+    );
+  }
 
-      {uploadedUrl && (
-        <p>
-          Uploaded file:{" "}
-          <a href={uploadedUrl} target="_blank" rel="noreferrer">
-            Open book
-          </a>
-        </p>
+  return (
+    <div style={{ padding: "30px", fontFamily: "Arial" }}>
+      <h1>Online Reader</h1>
+      <p>Temporary frontend for testing backend integration.</p>
+
+      {!selectedBook ? (
+        <div>
+          <h2>Library</h2>
+
+          {books.length === 0 ? (
+            <p>No books found in database.</p>
+          ) : (
+            <div style={{ display: "grid", gap: "15px" }}>
+              {books.map((book) => (
+                <div
+                  key={book.BookId}
+                  style={{
+                    border: "1px solid #ccc",
+                    padding: "15px",
+                    borderRadius: "8px",
+                    background: "#f9f9f9",
+                  }}
+                >
+                  <h3 style={{ margin: "0 0 10px 0" }}>{book.Title}</h3>
+                  <p style={{ margin: "5px 0" }}>
+                    <strong>Author:</strong> {book.Author || "Unknown"}
+                  </p>
+                  <p style={{ margin: "5px 0" }}>
+                    <strong>Type:</strong> {book.FileType}
+                  </p>
+                  <p style={{ margin: "5px 0" }}>
+                    <strong>Description:</strong> {book.Description || "No description"}
+                  </p>
+
+                  <button
+                    style={{ marginTop: "10px" }}
+                    onClick={() => setSelectedBook(book)}
+                  >
+                    Read book
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div>
+          <button onClick={() => setSelectedBook(null)}>Back to library</button>
+
+          <h2 style={{ marginTop: "20px" }}>{selectedBook.Title}</h2>
+          <p>
+            <strong>Author:</strong> {selectedBook.Author || "Unknown"}
+          </p>
+
+          {selectedBook.FileType === "pdf" ? (
+            <iframe
+              title="PDF Reader"
+              src={`http://localhost:5000/books/${selectedBook.BookId}/read`}
+              width="100%"
+              height="800px"
+              style={{
+                border: "1px solid #ccc",
+                marginTop: "20px",
+                background: "white",
+              }}
+            />
+          ) : (
+            <EpubReader bookId={selectedBook.BookId} />
+          )}
+        </div>
       )}
     </div>
   );

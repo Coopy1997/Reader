@@ -131,6 +131,7 @@ app.get("/books/:id/read", async (req, res) => {
     }
 
     res.setHeader("Content-Disposition", "inline")
+    res.setHeader("Access-Control-Expose-Headers", "Content-Type, Content-Disposition")
 
     downloadResponse.readableStreamBody.pipe(res)
   } catch (err) {

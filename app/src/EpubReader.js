@@ -1,157 +1,266 @@
-import { useEffect, useRef, useState } from "react";
-import ePub from "epubjs";
+import React, { useEffect, useRef, useState } from "react"
+import ePub from "epubjs"
+import { fetchProgress, saveProgress, getToken } from "./api"
 
-function EpubReader({ bookId }) {
-  const viewerRef = useRef(null);
-  const bookRef = useRef(null);
-  const renditionRef = useRef(null);
 
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [currentLocation, setCurrentLocation] = useState("");
+function EpubReader({ bookId, bookUrl }) {
+  const viewerRef = useRef(null)
+  const bookRef = useRef(null)
+  const renditionRef = useRef(null)
+
+  const [savedProgress, setSavedProgress] = useState(null)
+  const [progressLoaded, setProgressLoaded] = useState(false)
+
+  const [readingProgress, setReadingProgress] = useState({
+    format: "",
+    progressValue: "",
+    percentage: 0
+  })
+
+  const [isReady, setIsReady] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState("")
 
   useEffect(() => {
-    if (!bookId) return;
+    if (!bookId) return
 
-    let mounted = true;
-
-    const loadBook = async () => {
+    const loadProgress = async () => {
       try {
-        setLoading(true);
-        setError("");
-        setCurrentLocation("");
+        setProgressLoaded(false)
+        const data = await fetchProgress(bookId)
+        setSavedProgress(data)
+        setProgressLoaded(true)
+      } catch (err) {
+        console.error("Failed to load EPUB progress:", err)
+        setSavedProgress(null)
+        setProgressLoaded(true)
+      }
+    }
 
-        const response = await fetch(`http://localhost:5000/books/${bookId}/read`);
+    loadProgress()
+  }, [bookId])
+
+  useEffect(() => {
+    if (!bookUrl || !viewerRef.current || !progressLoaded) return
+
+    let cancelled = false
+
+    const setupReader = async () => {
+      try {
+        setIsLoading(true)
+        setIsReady(false)
+        setError("")
+
+        if (viewerRef.current) {
+          viewerRef.current.innerHTML = ""
+        }
+
+        if (renditionRef.current) {
+          try {
+            renditionRef.current.destroy()
+          } catch (err) {
+            console.error("Error destroying old rendition:", err)
+          }
+          renditionRef.current = null
+        }
+
+        if (bookRef.current) {
+          try {
+            bookRef.current.destroy()
+          } catch (err) {
+            console.error("Error destroying old book:", err)
+          }
+          bookRef.current = null
+        }
+
+        const token = getToken()
+
+        const response = await fetch(bookUrl, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        })
+
         if (!response.ok) {
-          throw new Error(`Failed to fetch EPUB: ${response.status}`);
+          throw new Error("Failed to fetch EPUB file")
         }
 
-        const arrayBuffer = await response.arrayBuffer();
+        const arrayBuffer = await response.arrayBuffer()
 
-        if (!mounted) return;
-
-        let tries = 0;
-        while (!viewerRef.current && tries < 20) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          tries++;
-        }
-
-        if (!viewerRef.current) {
-          throw new Error("Reader container not found");
-        }
-
-        viewerRef.current.innerHTML = "";
-
-        const book = ePub();
-        bookRef.current = book;
-
-        await book.open(arrayBuffer, "binary");
+        const book = ePub()
+        await book.open(arrayBuffer, "binary")
+        bookRef.current = book
 
         const rendition = book.renderTo(viewerRef.current, {
           width: "100%",
-          height: 800,
-          spread: "none",
-          flow: "paginated"
-        });
+          height: "100%",
+          flow: "paginated",
+          spread: "none"
+        })
 
-        renditionRef.current = rendition;
+        renditionRef.current = rendition
+
+        await book.ready
+        await book.locations.generate(1000)
 
         rendition.on("relocated", (location) => {
-          if (location?.start?.displayed?.page && location?.start?.displayed?.total) {
-            setCurrentLocation(
-              `Page ${location.start.displayed.page} of ${location.start.displayed.total}`
-            );
-          } else {
-            setCurrentLocation("Reading...");
+          const cfi = location?.start?.cfi || ""
+
+          let percentage = 0
+
+          if (cfi && bookRef.current) {
+            try {
+              const locationPercentage = bookRef.current.locations.percentageFromCfi(cfi)
+              percentage = locationPercentage ? locationPercentage * 100 : 0
+            } catch (err) {
+              console.error("Failed to calculate EPUB percentage:", err)
+            }
           }
-        });
 
-        await rendition.display();
+          setReadingProgress({
+            format: "epub",
+            progressValue: cfi,
+            percentage
+          })
+        })
 
-        if (mounted) {
-          setLoading(false);
+        const savedFormat = savedProgress?.Format || savedProgress?.format
+        const savedValue = savedProgress?.ProgressValue || savedProgress?.progressValue
+
+        if (savedFormat === "epub" && savedValue) {
+          await rendition.display(savedValue)
+        } else {
+          await rendition.display()
+        }
+
+        if (!cancelled) {
+          setIsReady(true)
+          setIsLoading(false)
         }
       } catch (err) {
-        console.error("EPUB READER ERROR:", err);
-        if (mounted) {
-          setError("Could not load EPUB.");
-          setLoading(false);
+        console.error("EPUB setup error:", err)
+
+        if (!cancelled) {
+          setError("Failed to load EPUB.")
+          setIsLoading(false)
+          setIsReady(false)
         }
       }
-    };
+    }
 
-    loadBook();
+    setupReader()
 
     return () => {
-      mounted = false;
+      cancelled = true
+      setIsReady(false)
 
-      try {
-        if (renditionRef.current) {
-          renditionRef.current.destroy();
+      if (renditionRef.current) {
+        try {
+          renditionRef.current.destroy()
+        } catch (err) {
+          console.error("Error destroying rendition:", err)
         }
-      } catch (e) {
-        console.log(e);
+        renditionRef.current = null
       }
 
-      try {
-        if (bookRef.current) {
-          bookRef.current.destroy();
+      if (bookRef.current) {
+        try {
+          bookRef.current.destroy()
+        } catch (err) {
+          console.error("Error destroying book:", err)
         }
-      } catch (e) {
-        console.log(e);
+        bookRef.current = null
       }
-    };
-  }, [bookId]);
-
-  const goPrev = () => {
-    if (renditionRef.current) {
-      renditionRef.current.prev();
     }
-  };
+  }, [bookUrl, progressLoaded, savedProgress])
 
-  const goNext = () => {
-    if (renditionRef.current) {
-      renditionRef.current.next();
+  useEffect(() => {
+    if (!bookId) return
+    if (!readingProgress.format || !readingProgress.progressValue) return
+
+    const timeout = setTimeout(async () => {
+      try {
+        await saveProgress(bookId, readingProgress)
+      } catch (err) {
+        console.error("Failed to save EPUB progress:", err)
+      }
+    }, 700)
+
+    return () => clearTimeout(timeout)
+  }, [readingProgress, bookId])
+
+  const goNext = async () => {
+    if (!isReady) return
+    if (!renditionRef.current) return
+
+    try {
+      await renditionRef.current.next()
+    } catch (err) {
+      console.error("Failed to go to next EPUB page:", err)
     }
-  };
+  }
+
+  const goPrev = async () => {
+    if (!isReady) return
+    if (!renditionRef.current) return
+
+    try {
+      await renditionRef.current.prev()
+    } catch (err) {
+      console.error("Failed to go to previous EPUB page:", err)
+    }
+  }
 
   return (
-    <div>
+    <div style={{ marginTop: "20px" }}>
+      {isLoading && <p>Loading EPUB...</p>}
+      {error && <p style={{ color: "red" }}>{error}</p>}
+
+      <div
+        style={{
+          width: "900px",
+          maxWidth: "100%",
+          border: "1px solid rgba(148, 163, 184, 0.16)",
+          backgroundColor: "#fff",
+          padding: "10px",
+          boxSizing: "border-box",
+          borderRadius: "18px"
+        }}
+      >
+        <div
+          ref={viewerRef}
+          style={{
+            width: "100%",
+            height: "600px",
+            overflow: "hidden",
+            position: "relative"
+          }}
+        />
+      </div>
+
       <div
         style={{
           display: "flex",
           gap: "10px",
           alignItems: "center",
-          marginTop: "20px",
-          marginBottom: "10px"
+          marginTop: "15px",
+          flexWrap: "wrap"
         }}
       >
-        <button onClick={goPrev} disabled={loading}>
-          Previous page
+        <button className="secondary-btn" onClick={goPrev} disabled={!isReady}>
+          Previous
         </button>
 
-        <button onClick={goNext} disabled={loading}>
-          Next page
+        <button className="secondary-btn" onClick={goNext} disabled={!isReady}>
+          Next
         </button>
 
-        <span style={{ marginLeft: "10px" }}>
-          {loading ? "Loading EPUB..." : currentLocation}
+        <span className="progress-text">
+          Progress: {readingProgress.percentage.toFixed(1)}%
         </span>
       </div>
-
-      {error && <p>{error}</p>}
-
-      <div
-        ref={viewerRef}
-        style={{
-          border: "1px solid #ccc",
-          minHeight: "800px",
-          background: "#fff",
-          width: "100%"
-        }}
-      />
     </div>
-  );
+  )
 }
 
-export default EpubReader;
+export default EpubReader

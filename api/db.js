@@ -9,15 +9,34 @@ const config = {
   options: {
     encrypt: true,
     trustServerCertificate: false
+  },
+  pool: {
+    max: 10,
+    min: 0,
+    idleTimeoutMillis: 30000
+  },
+  connectionTimeout: 30000,
+  requestTimeout: 30000
+}
+
+let pool = null
+
+async function connectDB() {
+  try {
+    if (pool) {
+      return pool
+    }
+
+    pool = await sql.connect(config)
+    console.log("Connected to Azure SQL Database")
+    return pool
+  } catch (err) {
+    console.error("Database connection failed:", err)
+    throw err
   }
 }
 
-let pool
-
-async function connectDB() {
-  if (pool) return pool
-  pool = await sql.connect(config)
-  return pool
+module.exports = {
+  connectDB,
+  sql
 }
-
-module.exports = { sql, connectDB }

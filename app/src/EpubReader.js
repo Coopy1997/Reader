@@ -1,100 +1,48 @@
 import React, { useEffect, useRef, useState } from "react"
 import ePub from "epubjs"
-import { fetchProgress, saveProgress, getToken } from "./api"
+import { fetchProgress, saveProgress } from "./api"
 
-
-function EpubReader({ bookId, bookUrl }) {
+export default function EpubReader({
+  bookId,
+  bookUrl,
+  bookTitle,
+  bookAuthor,
+  isFullscreen,
+  onToggleFullscreen
+}) {
   const viewerRef = useRef(null)
   const bookRef = useRef(null)
   const renditionRef = useRef(null)
+  const locationsReadyRef = useRef(false)
 
-  const [savedProgress, setSavedProgress] = useState(null)
-  const [progressLoaded, setProgressLoaded] = useState(false)
-
-  const [readingProgress, setReadingProgress] = useState({
-    format: "",
-    progressValue: "",
-    percentage: 0
-  })
-
-  const [isReady, setIsReady] = useState(false)
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(true)
+  const [toc, setToc] = useState([])
+  const [showToc, setShowToc] = useState(true)
+  const [currentLocation, setCurrentLocation] = useState("")
+  const [progressPercent, setProgressPercent] = useState(0)
 
   useEffect(() => {
-    if (!bookId) return
+    let isMounted = true
 
-    const loadProgress = async () => {
+    async function initReader() {
       try {
-        setProgressLoaded(false)
-        const data = await fetchProgress(bookId)
-        setSavedProgress(data)
-        setProgressLoaded(true)
-      } catch (err) {
-        console.error("Failed to load EPUB progress:", err)
-        setSavedProgress(null)
-        setProgressLoaded(true)
-      }
-    }
+        setLoading(true)
 
-    loadProgress()
-  }, [bookId])
-
-  useEffect(() => {
-    if (!bookUrl || !viewerRef.current || !progressLoaded) return
-
-    let cancelled = false
-
-    const setupReader = async () => {
-      try {
-        setIsLoading(true)
-        setIsReady(false)
-        setError("")
-
-        if (viewerRef.current) {
-          viewerRef.current.innerHTML = ""
-        }
-
-        if (renditionRef.current) {
-          try {
-            renditionRef.current.destroy()
-          } catch (err) {
-            console.error("Error destroying old rendition:", err)
-          }
-          renditionRef.current = null
-        }
-
-        if (bookRef.current) {
-          try {
-            bookRef.current.destroy()
-          } catch (err) {
-            console.error("Error destroying old book:", err)
-          }
-          bookRef.current = null
-        }
-
-        const token = getToken()
-
+        const token = localStorage.getItem("token")
         const response = await fetch(bookUrl, {
           headers: {
             Authorization: `Bearer ${token}`
           }
         })
 
-        if (!response.ok) {
-          throw new Error("Failed to fetch EPUB file")
-        }
-
         const arrayBuffer = await response.arrayBuffer()
 
-        const book = ePub()
-        await book.open(arrayBuffer, "binary")
+        const book = ePub(arrayBuffer)
         bookRef.current = book
 
         const rendition = book.renderTo(viewerRef.current, {
           width: "100%",
           height: "100%",
-          flow: "paginated",
           spread: "none"
         })
 
@@ -102,165 +50,182 @@ function EpubReader({ bookId, bookUrl }) {
 
         await book.ready
         await book.locations.generate(1000)
+        locationsReadyRef.current = true
 
-        rendition.on("relocated", (location) => {
-          const cfi = location?.start?.cfi || ""
+        const navigation = book.navigation?.toc || []
+        if (isMounted) {
+          setToc(navigation)
+        }
 
-          let percentage = 0
+        const saved = await fetchProgress(bookId)
 
-          if (cfi && bookRef.current) {
-            try {
-              const locationPercentage = bookRef.current.locations.percentageFromCfi(cfi)
-              percentage = locationPercentage ? locationPercentage * 100 : 0
-            } catch (err) {
-              console.error("Failed to calculate EPUB percentage:", err)
-            }
-          }
-
-          setReadingProgress({
-            format: "epub",
-            progressValue: cfi,
-            percentage
-          })
-        })
-
-        const savedFormat = savedProgress?.Format || savedProgress?.format
-        const savedValue = savedProgress?.ProgressValue || savedProgress?.progressValue
-
-        if (savedFormat === "epub" && savedValue) {
-          await rendition.display(savedValue)
+        if (saved?.ProgressValue && (saved.Format || saved.format) === "epub") {
+          await rendition.display(saved.ProgressValue)
         } else {
           await rendition.display()
         }
 
-        if (!cancelled) {
-          setIsReady(true)
-          setIsLoading(false)
-        }
-      } catch (err) {
-        console.error("EPUB setup error:", err)
+        rendition.on("relocated", async (location) => {
+          const cfi = location?.start?.cfi || ""
+          setCurrentLocation(cfi)
 
-        if (!cancelled) {
-          setError("Failed to load EPUB.")
-          setIsLoading(false)
-          setIsReady(false)
+          if (locationsReadyRef.current && cfi) {
+            const percentage = book.locations.percentageFromCfi(cfi) * 100
+            setProgressPercent(percentage)
+
+            try {
+              await saveProgress(bookId, {
+                format: "epub",
+                progressValue: cfi,
+                percentage
+              })
+            } catch (error) {
+              console.error("Failed to save EPUB progress:", error)
+            }
+          }
+        })
+
+        if (isMounted) {
+          setLoading(false)
+        }
+      } catch (error) {
+        console.error("EPUB init failed:", error)
+        if (isMounted) {
+          setLoading(false)
         }
       }
     }
 
-    setupReader()
+    initReader()
 
     return () => {
-      cancelled = true
-      setIsReady(false)
+      isMounted = false
 
       if (renditionRef.current) {
-        try {
-          renditionRef.current.destroy()
-        } catch (err) {
-          console.error("Error destroying rendition:", err)
-        }
+        renditionRef.current.destroy()
         renditionRef.current = null
       }
 
       if (bookRef.current) {
-        try {
-          bookRef.current.destroy()
-        } catch (err) {
-          console.error("Error destroying book:", err)
-        }
+        bookRef.current.destroy()
         bookRef.current = null
       }
     }
-  }, [bookUrl, progressLoaded, savedProgress])
+  }, [bookId, bookUrl])
 
   useEffect(() => {
-    if (!bookId) return
-    if (!readingProgress.format || !readingProgress.progressValue) return
+    const onKeyDown = (e) => {
+      if (!renditionRef.current) return
 
-    const timeout = setTimeout(async () => {
-      try {
-        await saveProgress(bookId, readingProgress)
-      } catch (err) {
-        console.error("Failed to save EPUB progress:", err)
+      if (e.key === "ArrowRight") {
+        e.preventDefault()
+        renditionRef.current.next()
       }
-    }, 700)
 
-    return () => clearTimeout(timeout)
-  }, [readingProgress, bookId])
+      if (e.key === "ArrowLeft") {
+        e.preventDefault()
+        renditionRef.current.prev()
+      }
 
-  const goNext = async () => {
-    if (!isReady) return
-    if (!renditionRef.current) return
+      if (e.key === "Escape" && document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {})
+      }
+    }
 
-    try {
-      await renditionRef.current.next()
-    } catch (err) {
-      console.error("Failed to go to next EPUB page:", err)
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [])
+
+  const goNext = () => {
+    if (renditionRef.current) {
+      renditionRef.current.next()
     }
   }
 
-  const goPrev = async () => {
-    if (!isReady) return
-    if (!renditionRef.current) return
+  const goPrev = () => {
+    if (renditionRef.current) {
+      renditionRef.current.prev()
+    }
+  }
 
-    try {
-      await renditionRef.current.prev()
-    } catch (err) {
-      console.error("Failed to go to previous EPUB page:", err)
+  const openTocItem = (href) => {
+    if (renditionRef.current && href) {
+      renditionRef.current.display(href)
     }
   }
 
   return (
-    <div style={{ marginTop: "20px" }}>
-      {isLoading && <p>Loading EPUB...</p>}
-      {error && <p style={{ color: "red" }}>{error}</p>}
+    <div className={`epub-reader-shell ${isFullscreen ? "epub-reader-shell-fullscreen" : ""}`}>
+      <div className="reader-controls reader-controls-top epub-toolbar">
+        <div className="epub-toolbar-left">
+          <button className="secondary-btn" onClick={() => setShowToc((prev) => !prev)}>
+            {showToc ? "Hide Contents" : "Show Contents"}
+          </button>
 
-      <div
-        style={{
-          width: "900px",
-          maxWidth: "100%",
-          border: "1px solid rgba(148, 163, 184, 0.16)",
-          backgroundColor: "#fff",
-          padding: "10px",
-          boxSizing: "border-box",
-          borderRadius: "18px"
-        }}
-      >
-        <div
-          ref={viewerRef}
-          style={{
-            width: "100%",
-            height: "600px",
-            overflow: "hidden",
-            position: "relative"
-          }}
-        />
+          <button className="secondary-btn" onClick={goPrev}>
+            Previous
+          </button>
+
+          <button className="secondary-btn" onClick={goNext}>
+            Next
+          </button>
+        </div>
+
+        <div className="epub-toolbar-center">
+          <div className="reader-book-mini">
+            <strong>{bookTitle}</strong>
+            <span>{bookAuthor || "Unknown"}</span>
+          </div>
+        </div>
+
+        <div className="epub-toolbar-right">
+          <div className="progress-text">{progressPercent.toFixed(1)}% read</div>
+          <button className="secondary-btn" onClick={onToggleFullscreen}>
+            {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+          </button>
+        </div>
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          gap: "10px",
-          alignItems: "center",
-          marginTop: "15px",
-          flexWrap: "wrap"
-        }}
-      >
-        <button className="secondary-btn" onClick={goPrev} disabled={!isReady}>
-          Previous
-        </button>
+      <div className="epub-layout">
+        {showToc && (
+          <aside className="epub-sidebar">
+            <div className="epub-sidebar-title">Contents</div>
 
-        <button className="secondary-btn" onClick={goNext} disabled={!isReady}>
-          Next
-        </button>
+            {toc.length === 0 ? (
+              <div className="epub-sidebar-empty">No table of contents available.</div>
+            ) : (
+              <div className="epub-toc-list">
+                {toc.map((item, index) => (
+                  <button
+                    key={`${item.href}-${index}`}
+                    className="epub-toc-item"
+                    onClick={() => openTocItem(item.href)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </aside>
+        )}
 
-        <span className="progress-text">
-          Progress: {readingProgress.percentage.toFixed(1)}%
-        </span>
+        <div className="epub-viewer-wrap">
+          {loading && (
+            <div className="reader-loading-overlay">
+              <div className="reader-spinner" />
+              <p>Loading EPUB...</p>
+            </div>
+          )}
+
+          <div ref={viewerRef} className="epub-viewer" />
+        </div>
       </div>
+
+      {!!currentLocation && (
+        <div className="epub-location-bar">
+          Current location saved
+        </div>
+      )}
     </div>
   )
 }
-
-export default EpubReader

@@ -1,5 +1,3 @@
-// src/api.js
-
 const API_BASE =
   process.env.REACT_APP_API_BASE_URL || "http://localhost:5000"
 
@@ -17,8 +15,6 @@ export function getAuthHeaders() {
     Authorization: `Bearer ${token}`
   }
 }
-
-// 🔥 FIXED FUNCTIONS (what your error needs)
 
 export async function fetchProgress(bookId) {
   const res = await fetch(`${API_BASE}/books/${bookId}/progress`, {

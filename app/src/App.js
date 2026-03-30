@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react"
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react"
 import { Document, Page, pdfjs } from "react-pdf"
 import "react-pdf/dist/Page/AnnotationLayer.css"
 import "react-pdf/dist/Page/TextLayer.css"
@@ -6,12 +12,12 @@ import EpubReader from "./EpubReader"
 import AuthPanel from "./AuthPanel"
 import AdminUploadForm from "./AdminUploadForm"
 import BookCover from "./BookCover"
-import { getApiBase, getAuthHeaders, getToken } from "./api"
 import "./App.css"
 
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
 
-const API_BASE = getApiBase()
+const API_BASE =
+  process.env.REACT_APP_API_BASE_URL || "http://localhost:5000"
 
 function formatPercent(value) {
   if (value == null || Number.isNaN(Number(value))) return 0
@@ -34,7 +40,7 @@ function App() {
   const [selectedBook, setSelectedBook] = useState(null)
   const [booksError, setBooksError] = useState("")
   const [loadingBooks, setLoadingBooks] = useState(false)
-  const [activePage, setActivePage] = useState("home")
+  const [currentPageView, setCurrentPageView] = useState("library")
 
   const [currentUser, setCurrentUser] = useState(() => {
     const stored = localStorage.getItem("user")
@@ -45,6 +51,8 @@ function App() {
   const [numPages, setNumPages] = useState(0)
   const [savedProgress, setSavedProgress] = useState(null)
   const [pdfReady, setPdfReady] = useState(false)
+  const [pdfPageInput, setPdfPageInput] = useState("1")
+  const [isReaderFullscreen, setIsReaderFullscreen] = useState(false)
 
   const [readingProgress, setReadingProgress] = useState({
     format: "",
@@ -56,48 +64,49 @@ function App() {
   const [formatFilter, setFormatFilter] = useState("all")
   const [sortBy, setSortBy] = useState("recent")
 
-  const token = getToken()
+  const token = localStorage.getItem("token")
+  const readerShellRef = useRef(null)
 
-const fetchBooks = useCallback(async () => {
-  if (!token) return
+  const fetchBooks = useCallback(async () => {
+    if (!token) return
 
-  try {
-    setLoadingBooks(true)
-    setBooksError("")
+    try {
+      setLoadingBooks(true)
+      setBooksError("")
 
-    const response = await fetch(`${API_BASE}/books/library`, {
-      headers: {
-        Authorization: `Bearer ${token}`
+      const response = await fetch(`${API_BASE}/books/library`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        setBooks([])
+        setBooksError(data.message || "Failed to fetch library.")
+        return
       }
-    })
 
-    const data = await response.json()
-
-    if (!response.ok) {
+      if (Array.isArray(data)) {
+        setBooks(data)
+      } else {
+        setBooks([])
+        setBooksError("Backend returned invalid data for /books/library.")
+      }
+    } catch (error) {
+      console.error("Failed to fetch library:", error)
       setBooks([])
-      setBooksError(data.message || "Failed to fetch library.")
-      return
+      setBooksError("Failed to fetch books from backend.")
+    } finally {
+      setLoadingBooks(false)
     }
+  }, [token])
 
-    if (Array.isArray(data)) {
-      setBooks(data)
-    } else {
-      setBooks([])
-      setBooksError("Backend returned invalid data for /books/library.")
-    }
-  } catch (error) {
-    console.error("Failed to fetch library:", error)
-    setBooks([])
-    setBooksError("Failed to fetch books from backend.")
-  } finally {
-    setLoadingBooks(false)
-  }
-}, [token])
-
-useEffect(() => {
-  if (!currentUser || !token) return
-  fetchBooks()
-}, [currentUser, token, fetchBooks])
+  useEffect(() => {
+    if (!currentUser || !token) return
+    fetchBooks()
+  }, [currentUser, token, fetchBooks])
 
   useEffect(() => {
     if (!selectedBook || !currentUser || !token) return
@@ -106,6 +115,7 @@ useEffect(() => {
     setPdfReady(false)
     setCurrentPage(1)
     setNumPages(0)
+    setPdfPageInput("1")
     setReadingProgress({
       format: "",
       progressValue: "",
@@ -117,7 +127,9 @@ useEffect(() => {
         const response = await fetch(
           `${API_BASE}/books/${selectedBook.BookId}/progress`,
           {
-            headers: getAuthHeaders()
+            headers: {
+              Authorization: `Bearer ${token}`
+            }
           }
         )
 
@@ -144,6 +156,7 @@ useEffect(() => {
     const page = parseInt(savedValue, 10)
     if (!isNaN(page) && page > 0) {
       setCurrentPage(page)
+      setPdfPageInput(String(page))
     }
   }, [savedProgress, selectedBook])
 
@@ -160,7 +173,7 @@ useEffect(() => {
           method: "PUT",
           headers: {
             "Content-Type": "application/json",
-            ...getAuthHeaders()
+            Authorization: `Bearer ${token}`
           },
           body: JSON.stringify(readingProgress)
         })
@@ -172,6 +185,44 @@ useEffect(() => {
     return () => clearTimeout(timeout)
   }, [readingProgress, selectedBook, pdfReady, token])
 
+  useEffect(() => {
+    if (!selectedBook) return
+
+    const onKeyDown = (e) => {
+      if (selectedBook.FileType === "pdf") {
+        if (e.key === "ArrowRight") {
+          e.preventDefault()
+          goToNextPage()
+        }
+
+        if (e.key === "ArrowLeft") {
+          e.preventDefault()
+          goToPreviousPage()
+        }
+      }
+
+      if (e.key === "Escape") {
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {})
+        }
+        setIsReaderFullscreen(false)
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [selectedBook, currentPage, numPages, pdfReady])
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setIsReaderFullscreen(!!document.fullscreenElement)
+    }
+
+    document.addEventListener("fullscreenchange", onFullscreenChange)
+    return () =>
+      document.removeEventListener("fullscreenchange", onFullscreenChange)
+  }, [])
+
   const pdfFileUrl = useMemo(() => {
     if (!selectedBook || selectedBook.FileType !== "pdf") return null
     return `${API_BASE}/books/${selectedBook.BookId}/read`
@@ -182,7 +233,9 @@ useEffect(() => {
 
     return {
       url: pdfFileUrl,
-      httpHeaders: getAuthHeaders()
+      httpHeaders: {
+        Authorization: `Bearer ${token}`
+      }
     }
   }, [pdfFileUrl, token])
 
@@ -208,34 +261,59 @@ useEffect(() => {
     setPdfReady(false)
   }
 
-  const goToNextPage = () => {
+  const goToPage = useCallback(
+    (pageNumber) => {
+      if (!pdfReady || !numPages) return
+
+      const safePage = Math.max(1, Math.min(numPages, pageNumber))
+      setCurrentPage(safePage)
+      setPdfPageInput(String(safePage))
+      setReadingProgress({
+        format: "pdf",
+        progressValue: String(safePage),
+        percentage: numPages ? (safePage / numPages) * 100 : 0
+      })
+    },
+    [pdfReady, numPages]
+  )
+
+  const goToNextPage = useCallback(() => {
     if (!pdfReady) return
     if (currentPage >= numPages) return
+    goToPage(currentPage + 1)
+  }, [pdfReady, currentPage, numPages, goToPage])
 
-    const nextPage = currentPage + 1
-    setCurrentPage(nextPage)
-    setReadingProgress({
-      format: "pdf",
-      progressValue: String(nextPage),
-      percentage: numPages ? (nextPage / numPages) * 100 : 0
-    })
-  }
-
-  const goToPreviousPage = () => {
+  const goToPreviousPage = useCallback(() => {
     if (!pdfReady) return
     if (currentPage <= 1) return
+    goToPage(currentPage - 1)
+  }, [pdfReady, currentPage, goToPage])
 
-    const previousPage = currentPage - 1
-    setCurrentPage(previousPage)
-    setReadingProgress({
-      format: "pdf",
-      progressValue: String(previousPage),
-      percentage: numPages ? (previousPage / numPages) * 100 : 0
-    })
+  const handlePdfJumpSubmit = (e) => {
+    e.preventDefault()
+    const page = parseInt(pdfPageInput, 10)
+    if (!isNaN(page)) {
+      goToPage(page)
+    }
+  }
+
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement && readerShellRef.current) {
+        await readerShellRef.current.requestFullscreen()
+        setIsReaderFullscreen(true)
+      } else {
+        await document.exitFullscreen()
+        setIsReaderFullscreen(false)
+      }
+    } catch (error) {
+      console.error("Fullscreen toggle failed:", error)
+    }
   }
 
   const openBook = (book) => {
     setSelectedBook(book)
+    setCurrentPageView("reader")
   }
 
   const closeBook = () => {
@@ -244,11 +322,19 @@ useEffect(() => {
     setPdfReady(false)
     setCurrentPage(1)
     setNumPages(0)
+    setPdfPageInput("1")
     setReadingProgress({
       format: "",
       progressValue: "",
       percentage: 0
     })
+    setCurrentPageView("library")
+
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {})
+    }
+
+    setIsReaderFullscreen(false)
   }
 
   const handleAuthSuccess = (user) => {
@@ -256,7 +342,7 @@ useEffect(() => {
     setSelectedBook(null)
     setBooks([])
     setBooksError("")
-    setActivePage("home")
+    setCurrentPageView("library")
   }
 
   const logout = () => {
@@ -270,12 +356,13 @@ useEffect(() => {
     setPdfReady(false)
     setCurrentPage(1)
     setNumPages(0)
+    setPdfPageInput("1")
     setReadingProgress({
       format: "",
       progressValue: "",
       percentage: 0
     })
-    setActivePage("home")
+    setCurrentPageView("library")
   }
 
   const filteredBooks = useMemo(() => {
@@ -332,15 +419,14 @@ useEffect(() => {
   }, [books, searchTerm, formatFilter, sortBy])
 
   const lastOpenedBook = useMemo(() => {
-    const booksWithProgress = books.filter((book) => book.progress?.UpdatedAt)
+    const withProgress = books
+      .filter((b) => b.progress?.UpdatedAt)
+      .sort(
+        (a, b) =>
+          new Date(b.progress.UpdatedAt) - new Date(a.progress.UpdatedAt)
+      )
 
-    if (booksWithProgress.length === 0) return null
-
-    return [...booksWithProgress].sort((a, b) => {
-      const aTime = new Date(a.progress.UpdatedAt).getTime()
-      const bTime = new Date(b.progress.UpdatedAt).getTime()
-      return bTime - aTime
-    })[0]
+    return withProgress[0] || null
   }, [books])
 
   const completedBooksCount = useMemo(() => {
@@ -372,29 +458,31 @@ useEffect(() => {
     )
   }
 
-  if (selectedBook) {
-    return (
-      <div className="app-shell">
-        <div className="topbar">
-          <div className="topbar-left">
-            <div>
-              <h1 className="brand-title">OnlineReader</h1>
-              <p className="brand-subtitle">Your personal cloud reading platform</p>
-            </div>
+  return (
+    <div className="app-shell">
+      <div className="topbar">
+        <div>
+          <h1 className="brand-title">OnlineReader</h1>
+          <p className="brand-subtitle">Your personal cloud reading platform</p>
+        </div>
 
-            <div className="topbar-nav">
-              <button className="nav-btn active" onClick={() => closeBook()}>
-                Reader
+        <div className="topbar-right">
+          <div className="topbar-actions">
+            <button
+              className={`secondary-btn ${currentPageView === "library" ? "active-tab" : ""}`}
+              onClick={() => setCurrentPageView("library")}
+            >
+              Library
+            </button>
+
+            {currentUser.role === "admin" && (
+              <button
+                className={`secondary-btn ${currentPageView === "admin" ? "active-tab" : ""}`}
+                onClick={() => setCurrentPageView("admin")}
+              >
+                Admin Panel
               </button>
-              <button className="nav-btn" onClick={() => setActivePage("home")}>
-                Home
-              </button>
-              {currentUser.role === "admin" && (
-                <button className="nav-btn" onClick={() => setActivePage("admin")}>
-                  Admin Panel
-                </button>
-              )}
-            </div>
+            )}
           </div>
 
           <div className="user-card">
@@ -405,136 +493,16 @@ useEffect(() => {
             </button>
           </div>
         </div>
-
-        <div className="reader-shell">
-          <div className="reader-header">
-            <div>
-              <button className="secondary-btn" onClick={closeBook}>
-                ← Back to Library
-              </button>
-              <h2 className="reader-title">{selectedBook.Title}</h2>
-              <p className="reader-meta">
-                {selectedBook.Author || "Unknown"} • {selectedBook.FileType}
-              </p>
-            </div>
-          </div>
-
-          {selectedBook.FileType === "pdf" && (
-            <div className="reader-card">
-              <div className="pdf-wrap">
-                {pdfDocumentFile && (
-                  <Document
-                    file={pdfDocumentFile}
-                    onLoadSuccess={onDocumentLoadSuccess}
-                    onLoadError={onDocumentLoadError}
-                    loading={<p>Loading PDF...</p>}
-                    error={<p>Failed to load PDF.</p>}
-                    externalLinkTarget="_self"
-                  >
-                    <Page
-                      pageNumber={currentPage}
-                      width={800}
-                      renderAnnotationLayer={true}
-                      renderTextLayer={true}
-                    />
-                  </Document>
-                )}
-              </div>
-
-              <div className="reader-controls">
-                <button
-                  className="secondary-btn"
-                  onClick={goToPreviousPage}
-                  disabled={!pdfReady || currentPage <= 1}
-                >
-                  Previous
-                </button>
-
-                <div className="progress-text">
-                  Page {currentPage} of {numPages || 0}
-                </div>
-
-                <button
-                  className="secondary-btn"
-                  onClick={goToNextPage}
-                  disabled={!pdfReady || currentPage >= numPages}
-                >
-                  Next
-                </button>
-
-                <div className="progress-text">
-                  {readingProgress.percentage
-                    ? `${readingProgress.percentage.toFixed(1)}% read`
-                    : ""}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {selectedBook.FileType === "epub" && (
-            <div className="reader-card">
-              <EpubReader
-                bookId={selectedBook.BookId}
-                bookUrl={`${API_BASE}/books/${selectedBook.BookId}/read`}
-              />
-            </div>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="app-shell">
-      <div className="topbar">
-        <div className="topbar-left">
-          <div>
-            <h1 className="brand-title">OnlineReader</h1>
-            <p className="brand-subtitle">Your personal cloud reading platform</p>
-          </div>
-
-          <div className="topbar-nav">
-            <button
-              className={`nav-btn ${activePage === "home" ? "active" : ""}`}
-              onClick={() => setActivePage("home")}
-            >
-              Home
-            </button>
-
-            {currentUser.role === "admin" && (
-              <button
-                className={`nav-btn ${activePage === "admin" ? "active" : ""}`}
-                onClick={() => setActivePage("admin")}
-              >
-                Admin Panel
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div className="user-card">
-          <div className="user-card-email">{currentUser.email}</div>
-          <div className="user-card-role">{currentUser.role}</div>
-          <button className="secondary-btn" onClick={logout}>
-            Logout
-          </button>
-        </div>
       </div>
 
-      {activePage === "admin" && currentUser.role === "admin" && (
-        <div className="admin-panel-shell">
-          <div className="admin-panel-header">
-            <h2 className="admin-panel-title">Admin Panel</h2>
-            <p className="admin-panel-subtitle">
-              Upload books, attach optional custom covers, and refresh the library.
-            </p>
-          </div>
-
+      {currentPageView === "admin" && currentUser.role === "admin" && (
+        <div className="admin-card">
+          <h2 className="section-title">Admin Panel</h2>
           <AdminUploadForm onUploadSuccess={fetchBooks} />
         </div>
       )}
 
-      {activePage === "home" && (
+      {currentPageView === "library" && !selectedBook && (
         <>
           <div className="dashboard-stats">
             <div className="stat-card">
@@ -590,45 +558,41 @@ useEffect(() => {
                 <h2 className="section-title">Resume Reading</h2>
               </div>
 
-              <div className="continue-grid">
-                {(() => {
-                  const percentage = formatPercent(lastOpenedBook.progress?.Percentage)
+              <div className="continue-grid continue-grid-single">
+                <div className="continue-card">
+                  <div className="continue-cover">
+                    <BookCover book={lastOpenedBook} />
+                  </div>
 
-                  return (
-                    <div className="continue-card">
-                      <div className="continue-cover">
-                        <BookCover book={lastOpenedBook} />
-                      </div>
-
-                      <div className="continue-body">
-                        <div className="continue-title">{lastOpenedBook.Title}</div>
-                        <div className="continue-meta">
-                          {lastOpenedBook.Author || "Unknown"} • {(lastOpenedBook.FileType || "").toUpperCase()}
-                        </div>
-
-                        <div className="mini-progress-row">
-                          <div className="mini-progress-bar">
-                            <div
-                              className="mini-progress-fill"
-                              style={{ width: `${percentage}%` }}
-                            />
-                          </div>
-                          <span className="mini-progress-text">
-                            {percentage.toFixed(1)}%
-                          </span>
-                        </div>
-
-                        <div className="continue-date">
-                          Last opened: {formatDate(lastOpenedBook.progress?.UpdatedAt) || "Recently"}
-                        </div>
-
-                        <button className="primary-btn" onClick={() => openBook(lastOpenedBook)}>
-                          Resume Reading
-                        </button>
-                      </div>
+                  <div className="continue-body">
+                    <div className="continue-title">{lastOpenedBook.Title}</div>
+                    <div className="continue-meta">
+                      {lastOpenedBook.Author || "Unknown"} • {(lastOpenedBook.FileType || "").toUpperCase()}
                     </div>
-                  )
-                })()}
+
+                    <div className="mini-progress-row">
+                      <div className="mini-progress-bar">
+                        <div
+                          className="mini-progress-fill"
+                          style={{
+                            width: `${formatPercent(lastOpenedBook.progress?.Percentage)}%`
+                          }}
+                        />
+                      </div>
+                      <span className="mini-progress-text">
+                        {formatPercent(lastOpenedBook.progress?.Percentage).toFixed(1)}%
+                      </span>
+                    </div>
+
+                    <div className="continue-date">
+                      Last opened: {formatDate(lastOpenedBook.progress?.UpdatedAt) || "Recently"}
+                    </div>
+
+                    <button className="primary-btn" onClick={() => openBook(lastOpenedBook)}>
+                      Resume Reading
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -639,9 +603,20 @@ useEffect(() => {
             </div>
 
             {booksError && <p className="error-text">{booksError}</p>}
-            {loadingBooks && <p className="message-text">Loading your library...</p>}
 
-            {!loadingBooks && filteredBooks.length === 0 ? (
+            {loadingBooks ? (
+              <div className="book-grid">
+                {Array.from({ length: 6 }).map((_, index) => (
+                  <div key={index} className="book-card skeleton-card">
+                    <div className="skeleton skeleton-cover" />
+                    <div className="skeleton skeleton-line skeleton-line-lg" />
+                    <div className="skeleton skeleton-line" />
+                    <div className="skeleton skeleton-line" />
+                    <div className="skeleton skeleton-line skeleton-line-sm" />
+                  </div>
+                ))}
+              </div>
+            ) : filteredBooks.length === 0 ? (
               <div className="empty-state">
                 <p>No books match your current filters.</p>
               </div>
@@ -706,6 +681,118 @@ useEffect(() => {
             )}
           </div>
         </>
+      )}
+
+      {selectedBook && (
+        <div
+          ref={readerShellRef}
+          className={`reader-shell ${isReaderFullscreen ? "reader-shell-fullscreen" : ""}`}
+        >
+          <div className="reader-header reader-toolbar">
+            <div className="reader-toolbar-left">
+              <button className="secondary-btn" onClick={closeBook}>
+                ← Back to Library
+              </button>
+
+              <div>
+                <h2 className="reader-title">{selectedBook.Title}</h2>
+                <p className="reader-meta">
+                  {selectedBook.Author || "Unknown"} • {selectedBook.FileType}
+                </p>
+              </div>
+            </div>
+
+            <div className="reader-toolbar-right">
+              <button className="secondary-btn" onClick={toggleFullscreen}>
+                {isReaderFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+              </button>
+            </div>
+          </div>
+
+          {selectedBook.FileType === "pdf" && (
+            <div className="reader-card">
+              <div className="reader-controls reader-controls-top">
+                <button
+                  className="secondary-btn"
+                  onClick={goToPreviousPage}
+                  disabled={!pdfReady || currentPage <= 1}
+                >
+                  Previous
+                </button>
+
+                <form className="page-jump-form" onSubmit={handlePdfJumpSubmit}>
+                  <span className="page-jump-label">Page</span>
+                  <input
+                    className="page-jump-input"
+                    type="number"
+                    min="1"
+                    max={numPages || 1}
+                    value={pdfPageInput}
+                    onChange={(e) => setPdfPageInput(e.target.value)}
+                  />
+                  <span className="page-jump-total">of {numPages || 0}</span>
+                  <button className="secondary-btn" type="submit" disabled={!pdfReady}>
+                    Go
+                  </button>
+                </form>
+
+                <button
+                  className="secondary-btn"
+                  onClick={goToNextPage}
+                  disabled={!pdfReady || currentPage >= numPages}
+                >
+                  Next
+                </button>
+
+                <div className="progress-text">
+                  {readingProgress.percentage
+                    ? `${readingProgress.percentage.toFixed(1)}% read`
+                    : ""}
+                </div>
+              </div>
+
+              <div className="pdf-wrap">
+                {!pdfReady && (
+                  <div className="reader-loading-overlay">
+                    <div className="reader-spinner" />
+                    <p>Loading PDF...</p>
+                  </div>
+                )}
+
+                {pdfDocumentFile && (
+                  <Document
+                    file={pdfDocumentFile}
+                    onLoadSuccess={onDocumentLoadSuccess}
+                    onLoadError={onDocumentLoadError}
+                    loading=""
+                    error={<p>Failed to load PDF.</p>}
+                    externalLinkTarget="_self"
+                  >
+                    <Page
+                      pageNumber={currentPage}
+                      width={isReaderFullscreen ? 1000 : 800}
+                      renderAnnotationLayer={true}
+                      renderTextLayer={true}
+                    />
+                  </Document>
+                )}
+              </div>
+            </div>
+          )}
+
+          {selectedBook.FileType === "epub" && (
+            <div className="reader-card">
+              <EpubReader
+                bookId={selectedBook.BookId}
+                bookTitle={selectedBook.Title}
+                bookAuthor={selectedBook.Author}
+                bookUrl={`${API_BASE}/books/${selectedBook.BookId}/read`}
+                isFullscreen={isReaderFullscreen}
+                onToggleFullscreen={toggleFullscreen}
+              />
+            </div>
+          )}
+        </div>
       )}
     </div>
   )

@@ -12,13 +12,30 @@ require("dotenv").config()
 const app = express()
 const PORT = process.env.PORT || 5000
 
-app.use(cors({
-  origin: [
-    "http://localhost:3000",
-    "https://reader-taupe-nu.vercel.app"
-  ],
+const allowedOrigins = [
+  "http://localhost:3000",
+  "https://reader-taupe-nu.vercel.app"
+]
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin) {
+      return callback(null, true)
+    }
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true)
+    }
+
+    return callback(new Error("Not allowed by CORS"))
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true
-}))
+}
+
+app.use(cors(corsOptions))
+app.options(/.*/, cors(corsOptions))
 app.use(express.json())
 
 app.use(authRoutes)
@@ -149,7 +166,9 @@ app.post(
       } else if (fileName.endsWith(".epub")) {
         fileType = "epub"
       } else {
-        return res.status(400).json({ message: "Only PDF and EPUB files are allowed" })
+        return res.status(400).json({
+          message: "Only PDF and EPUB files are allowed"
+        })
       }
 
       let coverImagePath = null
@@ -170,12 +189,16 @@ app.post(
       }
 
       const bookId = uuidv4()
-
       const containerClient = blobServiceClient.getContainerClient(containerName)
 
       const blobName = `books/${bookId}-${bookFile.originalname}`
       const blockBlobClient = containerClient.getBlockBlobClient(blobName)
-      await blockBlobClient.uploadData(bookFile.buffer)
+
+      await blockBlobClient.uploadData(bookFile.buffer, {
+        blobHTTPHeaders: {
+          blobContentType: bookFile.mimetype
+        }
+      })
 
       if (coverImage) {
         const coverBlobName = `covers/${bookId}-${coverImage.originalname}`
@@ -241,12 +264,10 @@ app.get("/books/:id/read", requireAuth, async (req, res) => {
     const blobClient = containerClient.getBlobClient(book.BlobPath)
     const downloadResponse = await blobClient.download()
 
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Access-Control-Expose-Headers", "Content-Type, Content-Disposition")
-
     if (book.FileType === "pdf") {
       res.setHeader("Content-Type", "application/pdf")
       res.setHeader("Content-Disposition", "inline")
+      res.setHeader("Access-Control-Expose-Headers", "Content-Type, Content-Disposition")
       downloadResponse.readableStreamBody.pipe(res)
       return
     }
@@ -255,6 +276,7 @@ app.get("/books/:id/read", requireAuth, async (req, res) => {
       res.setHeader("Content-Type", "application/epub+zip")
       res.setHeader("Content-Disposition", 'inline; filename="book.epub"')
       res.setHeader("Cache-Control", "no-store")
+      res.setHeader("Access-Control-Expose-Headers", "Content-Type, Content-Disposition")
       downloadResponse.readableStreamBody.pipe(res)
       return
     }
@@ -293,14 +315,10 @@ app.get("/books/:id/cover", requireAuth, async (req, res) => {
     const blobClient = containerClient.getBlobClient(book.CoverImagePath)
     const downloadResponse = await blobClient.download()
 
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Access-Control-Expose-Headers", "Content-Type, Content-Disposition")
     res.setHeader("Content-Disposition", "inline")
+    res.setHeader("Access-Control-Expose-Headers", "Content-Type, Content-Disposition")
+    res.setHeader("Content-Type", downloadResponse.contentType || "image/jpeg")
 
-    const contentType =
-      downloadResponse.contentType || "image/jpeg"
-
-    res.setHeader("Content-Type", contentType)
     downloadResponse.readableStreamBody.pipe(res)
   } catch (err) {
     console.error("GET /books/:id/cover error:", err)

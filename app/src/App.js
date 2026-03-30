@@ -12,6 +12,13 @@ import EpubReader from "./EpubReader"
 import AuthPanel from "./AuthPanel"
 import AdminUploadForm from "./AdminUploadForm"
 import BookCover from "./BookCover"
+import {
+  deleteAdminBook,
+  getAdminBooks,
+  replaceAdminBookFile,
+  replaceAdminCover,
+  updateAdminBook
+} from "./api"
 import "./App.css"
 
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
@@ -64,6 +71,19 @@ function App() {
   const [formatFilter, setFormatFilter] = useState("all")
   const [sortBy, setSortBy] = useState("recent")
 
+  const [adminBooks, setAdminBooks] = useState([])
+  const [adminStats, setAdminStats] = useState(null)
+  const [adminLoading, setAdminLoading] = useState(false)
+  const [adminError, setAdminError] = useState("")
+  const [adminSearch, setAdminSearch] = useState("")
+  const [adminFormatFilter, setAdminFormatFilter] = useState("all")
+  const [adminSortBy, setAdminSortBy] = useState("newest")
+  const [editingBook, setEditingBook] = useState(null)
+  const [editTitle, setEditTitle] = useState("")
+  const [editAuthor, setEditAuthor] = useState("")
+  const [editDescription, setEditDescription] = useState("")
+  const [adminActionLoading, setAdminActionLoading] = useState(false)
+
   const token = localStorage.getItem("token")
   const readerShellRef = useRef(null)
 
@@ -103,10 +123,34 @@ function App() {
     }
   }, [token])
 
+  const fetchAdminBooks = useCallback(async () => {
+    if (!token || currentUser?.role !== "admin") return
+
+    try {
+      setAdminLoading(true)
+      setAdminError("")
+
+      const data = await getAdminBooks()
+      setAdminBooks(data.books || [])
+      setAdminStats(data.stats || null)
+    } catch (error) {
+      console.error("Failed to fetch admin books:", error)
+      setAdminError(error.message || "Failed to load admin panel")
+    } finally {
+      setAdminLoading(false)
+    }
+  }, [token, currentUser])
+
   useEffect(() => {
     if (!currentUser || !token) return
     fetchBooks()
   }, [currentUser, token, fetchBooks])
+
+  useEffect(() => {
+    if (currentPageView === "admin" && currentUser?.role === "admin") {
+      fetchAdminBooks()
+    }
+  }, [currentPageView, currentUser, fetchAdminBooks])
 
   useEffect(() => {
     if (!selectedBook || !currentUser || !token) return
@@ -350,8 +394,11 @@ function App() {
     localStorage.removeItem("user")
     setCurrentUser(null)
     setBooks([])
+    setAdminBooks([])
+    setAdminStats(null)
     setSelectedBook(null)
     setBooksError("")
+    setAdminError("")
     setSavedProgress(null)
     setPdfReady(false)
     setCurrentPage(1)
@@ -363,6 +410,89 @@ function App() {
       percentage: 0
     })
     setCurrentPageView("library")
+  }
+
+  const openEditBook = (book) => {
+    setEditingBook(book)
+    setEditTitle(book.Title || "")
+    setEditAuthor(book.Author || "")
+    setEditDescription(book.Description || "")
+  }
+
+  const closeEditBook = () => {
+    setEditingBook(null)
+    setEditTitle("")
+    setEditAuthor("")
+    setEditDescription("")
+  }
+
+  const submitEditBook = async (e) => {
+    e.preventDefault()
+    if (!editingBook) return
+
+    try {
+      setAdminActionLoading(true)
+
+      await updateAdminBook(editingBook.BookId, {
+        title: editTitle,
+        author: editAuthor,
+        description: editDescription
+      })
+
+      await fetchAdminBooks()
+      await fetchBooks()
+      closeEditBook()
+    } catch (error) {
+      alert(error.message || "Failed to update book")
+    } finally {
+      setAdminActionLoading(false)
+    }
+  }
+
+  const handleDeleteBook = async (book) => {
+    const confirmed = window.confirm(`Delete "${book.Title}"?`)
+    if (!confirmed) return
+
+    try {
+      setAdminActionLoading(true)
+      await deleteAdminBook(book.BookId)
+      await fetchAdminBooks()
+      await fetchBooks()
+    } catch (error) {
+      alert(error.message || "Failed to delete book")
+    } finally {
+      setAdminActionLoading(false)
+    }
+  }
+
+  const handleReplaceCover = async (book, file) => {
+    if (!file) return
+
+    try {
+      setAdminActionLoading(true)
+      await replaceAdminCover(book.BookId, file)
+      await fetchAdminBooks()
+      await fetchBooks()
+    } catch (error) {
+      alert(error.message || "Failed to replace cover")
+    } finally {
+      setAdminActionLoading(false)
+    }
+  }
+
+  const handleReplaceBookFile = async (book, file) => {
+    if (!file) return
+
+    try {
+      setAdminActionLoading(true)
+      await replaceAdminBookFile(book.BookId, file)
+      await fetchAdminBooks()
+      await fetchBooks()
+    } catch (error) {
+      alert(error.message || "Failed to replace file")
+    } finally {
+      setAdminActionLoading(false)
+    }
   }
 
   const filteredBooks = useMemo(() => {
@@ -417,6 +547,47 @@ function App() {
 
     return result
   }, [books, searchTerm, formatFilter, sortBy])
+
+  const filteredAdminBooks = useMemo(() => {
+    let result = [...adminBooks]
+
+    const query = adminSearch.trim().toLowerCase()
+
+    if (query) {
+      result = result.filter((book) => {
+        const haystack = [
+          book.Title,
+          book.Author,
+          book.Description,
+          book.FileType
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+
+        return haystack.includes(query)
+      })
+    }
+
+    if (adminFormatFilter !== "all") {
+      result = result.filter(
+        (book) => (book.FileType || "").toLowerCase() === adminFormatFilter
+      )
+    }
+
+    if (adminSortBy === "title") {
+      result.sort((a, b) => (a.Title || "").localeCompare(b.Title || ""))
+    } else if (adminSortBy === "author") {
+      result.sort((a, b) => (a.Author || "").localeCompare(b.Author || ""))
+    } else {
+      result.sort(
+        (a, b) =>
+          new Date(b.CreatedAt || 0).getTime() - new Date(a.CreatedAt || 0).getTime()
+      )
+    }
+
+    return result
+  }, [adminBooks, adminSearch, adminFormatFilter, adminSortBy])
 
   const lastOpenedBook = useMemo(() => {
     const withProgress = books
@@ -496,9 +667,208 @@ function App() {
       </div>
 
       {currentPageView === "admin" && currentUser.role === "admin" && (
-        <div className="admin-card">
-          <h2 className="section-title">Admin Panel</h2>
-          <AdminUploadForm onUploadSuccess={fetchBooks} />
+        <div className="admin-overhaul">
+          <div className="admin-stats-grid">
+            <div className="stat-card">
+              <div className="stat-label">Total books</div>
+              <div className="stat-value">{adminStats?.TotalBooks || 0}</div>
+            </div>
+
+            <div className="stat-card">
+              <div className="stat-label">Total users</div>
+              <div className="stat-value">{adminStats?.TotalUsers || 0}</div>
+            </div>
+
+            <div className="stat-card">
+              <div className="stat-label">Progress entries</div>
+              <div className="stat-value">{adminStats?.TotalProgressEntries || 0}</div>
+            </div>
+          </div>
+
+          <div className="admin-card">
+            <h2 className="section-title">Upload New Book</h2>
+            <AdminUploadForm
+              onUploadSuccess={async () => {
+                await fetchBooks()
+                await fetchAdminBooks()
+              }}
+            />
+          </div>
+
+          <div className="admin-card">
+            <div className="section-header">
+              <h2 className="section-title">Manage Books</h2>
+            </div>
+
+            <div className="library-toolbar admin-toolbar">
+              <input
+                className="input toolbar-input"
+                type="text"
+                placeholder="Search books..."
+                value={adminSearch}
+                onChange={(e) => setAdminSearch(e.target.value)}
+              />
+
+              <select
+                className="input toolbar-select"
+                value={adminFormatFilter}
+                onChange={(e) => setAdminFormatFilter(e.target.value)}
+              >
+                <option value="all">All formats</option>
+                <option value="pdf">PDF</option>
+                <option value="epub">EPUB</option>
+              </select>
+
+              <select
+                className="input toolbar-select"
+                value={adminSortBy}
+                onChange={(e) => setAdminSortBy(e.target.value)}
+              >
+                <option value="newest">Newest</option>
+                <option value="title">Title A–Z</option>
+                <option value="author">Author A–Z</option>
+              </select>
+            </div>
+
+            {adminError && <p className="error-text">{adminError}</p>}
+
+            {adminLoading ? (
+              <p className="message-text">Loading admin data...</p>
+            ) : (
+              <div className="admin-table-wrap">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Cover</th>
+                      <th>Title</th>
+                      <th>Author</th>
+                      <th>Format</th>
+                      <th>Readers</th>
+                      <th>Created</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredAdminBooks.map((book) => (
+                      <tr key={book.BookId}>
+                        <td className="admin-cover-cell">
+                          <div className="admin-cover-mini">
+                            <BookCover book={book} />
+                          </div>
+                        </td>
+                        <td>{book.Title}</td>
+                        <td>{book.Author || "Unknown"}</td>
+                        <td>{book.FileType}</td>
+                        <td>{book.ActiveReaders || 0}</td>
+                        <td>{formatDate(book.CreatedAt)}</td>
+                        <td>
+                          <div className="admin-actions">
+                            <button
+                              className="secondary-btn"
+                              onClick={() => openEditBook(book)}
+                            >
+                              Edit
+                            </button>
+
+                            <label className="secondary-btn admin-file-label">
+                              Replace Cover
+                              <input
+                                type="file"
+                                accept=".jpg,.jpeg,.png,.webp,image/*"
+                                hidden
+                                onChange={(e) =>
+                                  handleReplaceCover(book, e.target.files?.[0] || null)
+                                }
+                              />
+                            </label>
+
+                            <label className="secondary-btn admin-file-label">
+                              Replace File
+                              <input
+                                type="file"
+                                accept=".pdf,.epub"
+                                hidden
+                                onChange={(e) =>
+                                  handleReplaceBookFile(book, e.target.files?.[0] || null)
+                                }
+                              />
+                            </label>
+
+                            <button
+                              className="danger-btn"
+                              onClick={() => handleDeleteBook(book)}
+                              disabled={adminActionLoading}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+
+                    {filteredAdminBooks.length === 0 && (
+                      <tr>
+                        <td colSpan="7" className="admin-empty-cell">
+                          No books found.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {editingBook && (
+            <div className="modal-overlay" onClick={closeEditBook}>
+              <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+                <h3 className="section-title">Edit Book</h3>
+
+                <form className="admin-form" onSubmit={submitEditBook}>
+                  <input
+                    className="input"
+                    type="text"
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    placeholder="Title"
+                  />
+
+                  <input
+                    className="input"
+                    type="text"
+                    value={editAuthor}
+                    onChange={(e) => setEditAuthor(e.target.value)}
+                    placeholder="Author"
+                  />
+
+                  <textarea
+                    className="textarea"
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                    placeholder="Description"
+                  />
+
+                  <div className="modal-actions">
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={closeEditBook}
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      type="submit"
+                      className="primary-btn"
+                      disabled={adminActionLoading}
+                    >
+                      {adminActionLoading ? "Saving..." : "Save Changes"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

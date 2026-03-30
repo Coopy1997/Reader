@@ -24,26 +24,50 @@ export default function BookCover({ book }) {
 
   useEffect(() => {
     let cancelled = false
+    let objectUrlToRevoke = null
 
     async function loadCover() {
       try {
         setLoading(true)
+        setCoverUrl(null)
 
-        // 🔹 IF custom image exists → use it immediately
+        const token = localStorage.getItem("token")
+
+        // 1) custom uploaded cover
         if (book.CoverImagePath) {
-          setCoverUrl(`${API_BASE}/covers/${book.CoverImagePath}`)
+          const res = await fetch(
+            `${API_BASE}/books/${book.BookId}/cover`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`
+              }
+            }
+          )
+
+          if (!res.ok) {
+            throw new Error("Failed to fetch custom cover")
+          }
+
+          const blob = await res.blob()
+          objectUrlToRevoke = URL.createObjectURL(blob)
+
+          if (!cancelled) {
+            setCoverUrl(objectUrlToRevoke)
+          }
+
           return
         }
 
+        // 2) PDF fallback
         if (book.FileType === "pdf") {
-          // fallback handled elsewhere
-          setCoverUrl(null)
+          if (!cancelled) {
+            setCoverUrl(null)
+          }
           return
         }
 
+        // 3) EPUB extracted cover
         if (book.FileType === "epub") {
-          const token = localStorage.getItem("token")
-
           const res = await fetch(
             `${API_BASE}/books/${book.BookId}/read`,
             {
@@ -53,9 +77,12 @@ export default function BookCover({ book }) {
             }
           )
 
+          if (!res.ok) {
+            throw new Error("Failed to fetch EPUB")
+          }
+
           const blob = await res.blob()
           const zip = await JSZip.loadAsync(blob)
-
           const parser = new DOMParser()
 
           const containerXml = await zip
@@ -67,22 +94,27 @@ export default function BookCover({ book }) {
             "application/xml"
           )
 
-          const rootfilePath =
-            containerDoc.querySelector("rootfile").getAttribute("full-path")
+          const rootfileNode = containerDoc.querySelector("rootfile")
+          const rootfilePath = rootfileNode?.getAttribute("full-path")
+
+          if (!rootfilePath) {
+            throw new Error("No OPF rootfile found")
+          }
 
           const opfFile = zip.file(rootfilePath)
-          const opfText = await opfFile.async("text")
+          if (!opfFile) {
+            throw new Error("OPF file not found")
+          }
 
+          const opfText = await opfFile.async("text")
           const opfDoc = parser.parseFromString(opfText, "application/xml")
 
           const metadata = opfDoc.querySelector("metadata")
-          const manifestItems = [
-            ...opfDoc.querySelectorAll("manifest > item")
-          ]
+          const manifestItems = [...opfDoc.querySelectorAll("manifest > item")]
 
           let coverId = null
-
           const metaCover = metadata?.querySelector('meta[name="cover"]')
+
           if (metaCover) {
             coverId = metaCover.getAttribute("content")
           }
@@ -93,7 +125,7 @@ export default function BookCover({ book }) {
             const coverItem = manifestItems.find(
               (item) => item.getAttribute("id") === coverId
             )
-            coverHref = coverItem?.getAttribute("href")
+            coverHref = coverItem?.getAttribute("href") || null
           }
 
           if (!coverHref) {
@@ -101,25 +133,23 @@ export default function BookCover({ book }) {
               const props = item.getAttribute("properties") || ""
               return props.includes("cover-image")
             })
-            coverHref = propertiesCover?.getAttribute("href")
+            coverHref = propertiesCover?.getAttribute("href") || null
           }
 
           if (!coverHref) {
-            const guess = manifestItems.find((item) =>
-              (item.getAttribute("href") || "")
-                .toLowerCase()
-                .includes("cover")
-            )
-            coverHref = guess?.getAttribute("href")
+            const imageGuess = manifestItems.find((item) => {
+              const href = (item.getAttribute("href") || "").toLowerCase()
+              return href.includes("cover")
+            })
+            coverHref = imageGuess?.getAttribute("href") || null
           }
 
-          if (!coverHref) throw new Error("No cover found")
+          if (!coverHref) {
+            throw new Error("No cover found")
+          }
 
           const opfDir = rootfilePath.includes("/")
-            ? rootfilePath.substring(
-                0,
-                rootfilePath.lastIndexOf("/") + 1
-              )
+            ? rootfilePath.substring(0, rootfilePath.lastIndexOf("/") + 1)
             : ""
 
           const normalizedPath = `${opfDir}${coverHref}`
@@ -128,26 +158,37 @@ export default function BookCover({ book }) {
             .replace(/^\.\//, "")
             .split("/")
             .reduce((acc, part) => {
-              if (part === "..") acc.pop()
-              else acc.push(part)
+              if (part === "..") {
+                acc.pop()
+              } else {
+                acc.push(part)
+              }
               return acc
             }, [])
             .join("/")
 
           const coverFile = zip.file(cleanPath)
-          if (!coverFile) throw new Error("Cover file not found")
+
+          if (!coverFile) {
+            throw new Error("Cover file not found in zip")
+          }
 
           const coverBlob = await coverFile.async("blob")
+          objectUrlToRevoke = URL.createObjectURL(coverBlob)
 
           if (!cancelled) {
-            setCoverUrl(URL.createObjectURL(coverBlob))
+            setCoverUrl(objectUrlToRevoke)
           }
         }
       } catch (err) {
         console.warn("Cover extraction failed:", err)
-        setCoverUrl(null)
+        if (!cancelled) {
+          setCoverUrl(null)
+        }
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+        }
       }
     }
 
@@ -155,8 +196,11 @@ export default function BookCover({ book }) {
 
     return () => {
       cancelled = true
+      if (objectUrlToRevoke) {
+        URL.revokeObjectURL(objectUrlToRevoke)
+      }
     }
-  }, [book])
+  }, [book.BookId, book.CoverImagePath, book.FileType, book.Title, book.Author])
 
   if (loading) {
     return (

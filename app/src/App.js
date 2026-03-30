@@ -230,32 +230,32 @@ function App() {
   }, [readingProgress, selectedBook, pdfReady, token])
 
   useEffect(() => {
-    if (!selectedBook) return
+  if (!selectedBook) return
 
-    const onKeyDown = (e) => {
-      if (selectedBook.FileType === "pdf") {
-        if (e.key === "ArrowRight") {
-          e.preventDefault()
-          goToNextPage()
-        }
-
-        if (e.key === "ArrowLeft") {
-          e.preventDefault()
-          goToPreviousPage()
-        }
+  const onKeyDown = (e) => {
+    if (selectedBook.FileType === "pdf") {
+      if (e.key === "ArrowRight") {
+        e.preventDefault()
+        goToNextPage()
       }
 
-      if (e.key === "Escape") {
-        if (document.fullscreenElement) {
-          document.exitFullscreen().catch(() => {})
-        }
-        setIsReaderFullscreen(false)
+      if (e.key === "ArrowLeft") {
+        e.preventDefault()
+        goToPreviousPage()
       }
     }
 
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [selectedBook, currentPage, numPages, pdfReady])
+    if (e.key === "Escape") {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {})
+      }
+      setIsReaderFullscreen(false)
+    }
+  }
+
+  window.addEventListener("keydown", onKeyDown)
+  return () => window.removeEventListener("keydown", onKeyDown)
+}, [selectedBook, goToNextPage, goToPreviousPage])
 
   useEffect(() => {
     const onFullscreenChange = () => {

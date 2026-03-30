@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useState } from "react"
 import { Document, Page, pdfjs } from "react-pdf"
 import "react-pdf/dist/Page/AnnotationLayer.css"
 import "react-pdf/dist/Page/TextLayer.css"
@@ -58,44 +58,46 @@ function App() {
 
   const token = getToken()
 
-  const fetchBooks = async () => {
-    if (!token) return
+const fetchBooks = useCallback(async () => {
+  if (!token) return
 
-    try {
-      setLoadingBooks(true)
-      setBooksError("")
+  try {
+    setLoadingBooks(true)
+    setBooksError("")
 
-      const response = await fetch(`${API_BASE}/books/library`, {
-        headers: getAuthHeaders()
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        setBooks([])
-        setBooksError(data.message || "Failed to fetch library.")
-        return
+    const response = await fetch(`${API_BASE}/books/library`, {
+      headers: {
+        Authorization: `Bearer ${token}`
       }
+    })
 
-      if (Array.isArray(data)) {
-        setBooks(data)
-      } else {
-        setBooks([])
-        setBooksError("Backend returned invalid data for /books/library.")
-      }
-    } catch (error) {
-      console.error("Failed to fetch library:", error)
+    const data = await response.json()
+
+    if (!response.ok) {
       setBooks([])
-      setBooksError("Failed to fetch books from backend.")
-    } finally {
-      setLoadingBooks(false)
+      setBooksError(data.message || "Failed to fetch library.")
+      return
     }
-  }
 
-  useEffect(() => {
-    if (!currentUser || !token) return
-    fetchBooks()
-  }, [currentUser])
+    if (Array.isArray(data)) {
+      setBooks(data)
+    } else {
+      setBooks([])
+      setBooksError("Backend returned invalid data for /books/library.")
+    }
+  } catch (error) {
+    console.error("Failed to fetch library:", error)
+    setBooks([])
+    setBooksError("Failed to fetch books from backend.")
+  } finally {
+    setLoadingBooks(false)
+  }
+}, [token])
+
+useEffect(() => {
+  if (!currentUser || !token) return
+  fetchBooks()
+}, [currentUser, token, fetchBooks])
 
   useEffect(() => {
     if (!selectedBook || !currentUser || !token) return

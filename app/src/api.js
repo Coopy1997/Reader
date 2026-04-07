@@ -105,6 +105,18 @@ export async function requestArrayBuffer(path, options = {}) {
   return response.arrayBuffer()
 }
 
+function buildApiUrl(path) {
+  return `${API_BASE}${path}`
+}
+
+function parseXhrResponse(xhr) {
+  try {
+    return xhr.responseText ? JSON.parse(xhr.responseText) : null
+  } catch (error) {
+    return null
+  }
+}
+
 export async function fetchLibraryBooks() {
   return requestJson("/books/library", {
     headers: getAuthHeaders()
@@ -152,11 +164,44 @@ export async function getAdminBooks() {
   })
 }
 
-export async function uploadAdminBook(formData) {
-  return requestJson("/admin/books/upload", {
-    method: "POST",
-    headers: getAuthHeaders(),
-    body: formData
+export function uploadAdminBook(formData, { onProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+
+    xhr.open("POST", buildApiUrl("/admin/books/upload"))
+
+    const headers = getAuthHeaders()
+    Object.entries(headers).forEach(([key, value]) => {
+      xhr.setRequestHeader(key, value)
+    })
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || !onProgress) return
+      onProgress(Math.round((event.loaded / event.total) * 100))
+    }
+
+    xhr.onload = () => {
+      const data = parseXhrResponse(xhr)
+
+      if (xhr.status === 401) {
+        notifyUnauthorized()
+        reject(new Error("Your session has expired. Please log in again."))
+        return
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data)
+        return
+      }
+
+      reject(new Error(data?.message || "Upload failed"))
+    }
+
+    xhr.onerror = () => {
+      reject(new Error("Upload failed"))
+    }
+
+    xhr.send(formData)
   })
 }
 
@@ -177,10 +222,32 @@ export async function updateAdminBook(bookId, payload) {
   })
 }
 
+export async function updateAdminBookSettings(bookId, payload) {
+  return requestJson(`/admin/books/${bookId}/settings`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
+    body: JSON.stringify(payload)
+  })
+}
+
 export async function deleteAdminBook(bookId) {
   return requestJson(`/admin/books/${bookId}`, {
     method: "DELETE",
     headers: getAuthHeaders()
+  })
+}
+
+export async function runAdminBulkAction(payload) {
+  return requestJson("/admin/books/bulk", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
+    body: JSON.stringify(payload)
   })
 }
 

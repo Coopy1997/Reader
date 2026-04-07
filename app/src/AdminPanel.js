@@ -8,7 +8,9 @@ import {
   getAdminUsers,
   replaceAdminBookFile,
   replaceAdminCover,
+  runAdminBulkAction,
   updateAdminBook,
+  updateAdminBookSettings,
   updateAdminUserRole
 } from "./api"
 
@@ -35,6 +37,20 @@ function formatPercent(value) {
   return Math.max(0, Math.min(100, number))
 }
 
+function formatBytes(value) {
+  const bytes = Number(value)
+
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B"
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"]
+  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+  const amount = bytes / 1024 ** exponent
+
+  return `${amount.toFixed(amount >= 10 || exponent === 0 ? 0 : 1)} ${units[exponent]}`
+}
+
 function getReaderStatus(reader) {
   const percentage = formatPercent(reader.Percentage)
 
@@ -43,10 +59,35 @@ function getReaderStatus(reader) {
   return "Started"
 }
 
+function sortBooks(books, adminSortBy) {
+  const result = [...books]
+
+  if (adminSortBy === "title") {
+    result.sort((a, b) => (a.Title || "").localeCompare(b.Title || ""))
+  } else if (adminSortBy === "author") {
+    result.sort((a, b) => (a.Author || "").localeCompare(b.Author || ""))
+  } else if (adminSortBy === "storage") {
+    result.sort((a, b) => (b.TotalStorageBytes || 0) - (a.TotalStorageBytes || 0))
+  } else if (adminSortBy === "readers") {
+    result.sort((a, b) => (b.ActiveReaders || 0) - (a.ActiveReaders || 0))
+  } else {
+    result.sort(
+      (a, b) =>
+        new Date(b.CreatedAt || 0).getTime() - new Date(a.CreatedAt || 0).getTime()
+    )
+  }
+
+  return result
+}
+
 export default function AdminPanel({ currentUser, onLibraryRefresh }) {
   const [activeAdminTab, setActiveAdminTab] = useState("books")
   const [adminBooks, setAdminBooks] = useState([])
   const [adminStats, setAdminStats] = useState(null)
+  const [adminHighlights, setAdminHighlights] = useState({
+    mostReadBooks: [],
+    recentlyUploadedBooks: []
+  })
   const [adminUsers, setAdminUsers] = useState([])
   const [userStats, setUserStats] = useState(null)
   const [adminLoading, setAdminLoading] = useState(false)
@@ -55,7 +96,10 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
   const [usersError, setUsersError] = useState("")
   const [adminSearch, setAdminSearch] = useState("")
   const [adminFormatFilter, setAdminFormatFilter] = useState("all")
+  const [adminVisibilityFilter, setAdminVisibilityFilter] = useState("all")
+  const [adminFeaturedFilter, setAdminFeaturedFilter] = useState("all")
   const [adminSortBy, setAdminSortBy] = useState("newest")
+  const [selectedBookIds, setSelectedBookIds] = useState([])
   const [userSearch, setUserSearch] = useState("")
   const [userRoleFilter, setUserRoleFilter] = useState("all")
   const [editingBook, setEditingBook] = useState(null)
@@ -76,6 +120,12 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
       const data = await getAdminBooks()
       setAdminBooks(data.books || [])
       setAdminStats(data.stats || null)
+      setAdminHighlights(
+        data.highlights || {
+          mostReadBooks: [],
+          recentlyUploadedBooks: []
+        }
+      )
     } catch (error) {
       console.error("Failed to fetch admin books:", error)
       setAdminError(error.message || "Failed to load admin panel")
@@ -106,24 +156,20 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
   }, [fetchAdminBooks, fetchAdminUsers])
 
   const filteredAdminBooks = useMemo(() => {
-    let result = [...adminBooks]
     const query = adminSearch.trim().toLowerCase()
 
-    if (query) {
-      result = result.filter((book) => {
-        const haystack = [
-          book.Title,
-          book.Author,
-          book.Description,
-          book.FileType
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase()
+    let result = adminBooks.filter((book) => {
+      if (!query) {
+        return true
+      }
 
-        return haystack.includes(query)
-      })
-    }
+      const haystack = [book.Title, book.Author, book.Description, book.FileType]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+
+      return haystack.includes(query)
+    })
 
     if (adminFormatFilter !== "all") {
       result = result.filter(
@@ -131,19 +177,33 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
       )
     }
 
-    if (adminSortBy === "title") {
-      result.sort((a, b) => (a.Title || "").localeCompare(b.Title || ""))
-    } else if (adminSortBy === "author") {
-      result.sort((a, b) => (a.Author || "").localeCompare(b.Author || ""))
-    } else {
-      result.sort(
-        (a, b) =>
-          new Date(b.CreatedAt || 0).getTime() - new Date(a.CreatedAt || 0).getTime()
+    if (adminVisibilityFilter !== "all") {
+      result = result.filter((book) =>
+        adminVisibilityFilter === "hidden" ? book.IsHidden : !book.IsHidden
       )
     }
 
-    return result
-  }, [adminBooks, adminSearch, adminFormatFilter, adminSortBy])
+    if (adminFeaturedFilter !== "all") {
+      result = result.filter((book) =>
+        adminFeaturedFilter === "featured" ? book.IsFeatured : !book.IsFeatured
+      )
+    }
+
+    return sortBooks(result, adminSortBy)
+  }, [
+    adminBooks,
+    adminFeaturedFilter,
+    adminFormatFilter,
+    adminSearch,
+    adminSortBy,
+    adminVisibilityFilter
+  ])
+
+  useEffect(() => {
+    setSelectedBookIds((current) =>
+      current.filter((bookId) => filteredAdminBooks.some((book) => book.BookId === bookId))
+    )
+  }, [filteredAdminBooks])
 
   const filteredUsers = useMemo(() => {
     let result = [...adminUsers]
@@ -173,7 +233,7 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
     })
 
     return result
-  }, [adminUsers, userSearch, userRoleFilter])
+  }, [adminUsers, userRoleFilter, userSearch])
 
   const totalCompletedReaders = useMemo(() => {
     return bookReaders.filter((reader) => formatPercent(reader.Percentage) >= 100).length
@@ -182,6 +242,35 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
   const totalActiveReaders = useMemo(() => {
     return bookReaders.filter((reader) => formatPercent(reader.Percentage) > 0).length
   }, [bookReaders])
+
+  const allFilteredSelected =
+    filteredAdminBooks.length > 0 && selectedBookIds.length === filteredAdminBooks.length
+
+  const toggleBookSelection = useCallback((bookId) => {
+    setSelectedBookIds((current) =>
+      current.includes(bookId)
+        ? current.filter((id) => id !== bookId)
+        : [...current, bookId]
+    )
+  }, [])
+
+  const toggleSelectAllFiltered = useCallback(() => {
+    setSelectedBookIds((current) => {
+      if (filteredAdminBooks.length === 0) {
+        return current
+      }
+
+      if (current.length === filteredAdminBooks.length) {
+        return []
+      }
+
+      return filteredAdminBooks.map((book) => book.BookId)
+    })
+  }, [filteredAdminBooks])
+
+  const refreshAdminAndLibrary = useCallback(async () => {
+    await Promise.all([fetchAdminBooks(), onLibraryRefresh()])
+  }, [fetchAdminBooks, onLibraryRefresh])
 
   const openEditBook = useCallback((book) => {
     setEditingBook(book)
@@ -236,7 +325,7 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
         description: editDescription
       })
 
-      await Promise.all([fetchAdminBooks(), onLibraryRefresh()])
+      await refreshAdminAndLibrary()
       closeEditBook()
     } catch (error) {
       window.alert(error.message || "Failed to update book")
@@ -253,7 +342,7 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
     try {
       setAdminActionLoading(true)
       await deleteAdminBook(book.BookId)
-      await Promise.all([fetchAdminBooks(), onLibraryRefresh()])
+      await refreshAdminAndLibrary()
     } catch (error) {
       window.alert(error.message || "Failed to delete book")
     } finally {
@@ -267,7 +356,7 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
     try {
       setAdminActionLoading(true)
       await replaceAdminCover(book.BookId, file)
-      await Promise.all([fetchAdminBooks(), onLibraryRefresh()])
+      await refreshAdminAndLibrary()
     } catch (error) {
       window.alert(error.message || "Failed to replace cover")
     } finally {
@@ -281,12 +370,69 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
     try {
       setAdminActionLoading(true)
       await replaceAdminBookFile(book.BookId, file)
-      await Promise.all([fetchAdminBooks(), onLibraryRefresh()])
+      await refreshAdminAndLibrary()
     } catch (error) {
       window.alert(error.message || "Failed to replace file")
     } finally {
       setAdminActionLoading(false)
     }
+  }
+
+  const handleBookSettingToggle = async (book, payload) => {
+    try {
+      setAdminActionLoading(true)
+      await updateAdminBookSettings(book.BookId, payload)
+      await refreshAdminAndLibrary()
+    } catch (error) {
+      window.alert(error.message || "Failed to update book settings")
+    } finally {
+      setAdminActionLoading(false)
+    }
+  }
+
+  const handleBulkAction = async (action) => {
+    if (selectedBookIds.length === 0) {
+      window.alert("Select at least one book first")
+      return
+    }
+
+    const confirmed = window.confirm(
+      `${action.charAt(0).toUpperCase()}${action.slice(1)} ${selectedBookIds.length} selected books?`
+    )
+
+    if (!confirmed) return
+
+    try {
+      setAdminActionLoading(true)
+      await runAdminBulkAction({
+        action,
+        bookIds: selectedBookIds
+      })
+      setSelectedBookIds([])
+      await refreshAdminAndLibrary()
+    } catch (error) {
+      window.alert(error.message || "Failed to run bulk action")
+    } finally {
+      setAdminActionLoading(false)
+    }
+  }
+
+  const handleFeatureSingleBook = async (book) => {
+    const nextFeatured = !book.IsFeatured
+
+    await handleBookSettingToggle(book, {
+      isHidden: book.IsHidden,
+      isFeatured: nextFeatured,
+      featuredRank: nextFeatured ? book.FeaturedRank || 1 : null
+    })
+  }
+
+  const handleHideSingleBook = async (book) => {
+    await handleBookSettingToggle(book, {
+      isHidden: !book.IsHidden,
+      isFeatured: book.IsFeatured,
+      featuredRank: book.IsFeatured ? book.FeaturedRank || 1 : null
+    })
   }
 
   const handleUserRoleUpdate = async (user, nextRole) => {
@@ -303,20 +449,82 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
 
   return (
     <div className="admin-overhaul">
-      <div className="admin-stats-grid">
+      <div className="admin-stats-grid admin-stats-grid-wide">
         <div className="stat-card">
           <div className="stat-label">Total books</div>
           <div className="stat-value">{adminStats?.TotalBooks || 0}</div>
         </div>
 
         <div className="stat-card">
-          <div className="stat-label">Total users</div>
-          <div className="stat-value">{userStats?.TotalUsers || adminStats?.TotalUsers || 0}</div>
+          <div className="stat-label">Visible books</div>
+          <div className="stat-value">{adminStats?.TotalVisibleBooks || 0}</div>
         </div>
 
         <div className="stat-card">
-          <div className="stat-label">Admins</div>
-          <div className="stat-value">{userStats?.TotalAdmins || 0}</div>
+          <div className="stat-label">Hidden books</div>
+          <div className="stat-value">{adminStats?.TotalHiddenBooks || 0}</div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-label">Featured books</div>
+          <div className="stat-value">{adminStats?.TotalFeaturedBooks || 0}</div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-label">Storage used</div>
+          <div className="stat-value stat-value-compact">
+            {formatBytes(adminStats?.TotalStorageBytes || 0)}
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-label">Average completion</div>
+          <div className="stat-value stat-value-compact">
+            {formatPercent(adminStats?.AverageCompletionPercentage).toFixed(1)}%
+          </div>
+        </div>
+      </div>
+
+      <div className="admin-highlights-grid">
+        <div className="admin-card">
+          <div className="section-header">
+            <h2 className="section-title">Recently Uploaded</h2>
+          </div>
+
+          <div className="highlight-list">
+            {adminHighlights.recentlyUploadedBooks?.map((book) => (
+              <div key={book.BookId} className="highlight-row">
+                <div>
+                  <div className="highlight-title">{book.Title}</div>
+                  <div className="highlight-meta">
+                    {book.Author || "Unknown"} | {formatDate(book.CreatedAt)}
+                  </div>
+                </div>
+                <div className="summary-chip">{(book.FileType || "").toUpperCase()}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="admin-card">
+          <div className="section-header">
+            <h2 className="section-title">Most Read Books</h2>
+          </div>
+
+          <div className="highlight-list">
+            {adminHighlights.mostReadBooks?.map((book) => (
+              <div key={book.BookId} className="highlight-row">
+                <div>
+                  <div className="highlight-title">{book.Title}</div>
+                  <div className="highlight-meta">
+                    {book.ActiveReaders || 0} readers |{" "}
+                    {formatPercent(book.AverageCompletionPercentage).toFixed(1)}% avg completion
+                  </div>
+                </div>
+                <div className="summary-chip">{formatBytes(book.TotalStorageBytes || 0)}</div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -324,7 +532,7 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
         <h2 className="section-title">Upload New Book</h2>
         <AdminUploadForm
           onUploadSuccess={async () => {
-            await Promise.all([fetchAdminBooks(), onLibraryRefresh()])
+            await refreshAdminAndLibrary()
           }}
         />
       </div>
@@ -354,7 +562,7 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
 
         {activeAdminTab === "books" && (
           <>
-            <div className="library-toolbar admin-toolbar">
+            <div className="library-toolbar admin-toolbar admin-toolbar-extended">
               <input
                 className="input toolbar-input"
                 type="text"
@@ -375,13 +583,93 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
 
               <select
                 className="input toolbar-select"
+                value={adminVisibilityFilter}
+                onChange={(e) => setAdminVisibilityFilter(e.target.value)}
+              >
+                <option value="all">All visibility</option>
+                <option value="visible">Visible</option>
+                <option value="hidden">Hidden</option>
+              </select>
+
+              <select
+                className="input toolbar-select"
+                value={adminFeaturedFilter}
+                onChange={(e) => setAdminFeaturedFilter(e.target.value)}
+              >
+                <option value="all">All featuring</option>
+                <option value="featured">Featured</option>
+                <option value="standard">Standard</option>
+              </select>
+
+              <select
+                className="input toolbar-select"
                 value={adminSortBy}
                 onChange={(e) => setAdminSortBy(e.target.value)}
               >
                 <option value="newest">Newest</option>
                 <option value="title">Title A-Z</option>
                 <option value="author">Author A-Z</option>
+                <option value="readers">Most readers</option>
+                <option value="storage">Largest storage</option>
               </select>
+            </div>
+
+            <div className="admin-bulk-bar">
+              <label className="admin-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={allFilteredSelected}
+                  onChange={toggleSelectAllFiltered}
+                />
+                <span>Select all filtered ({filteredAdminBooks.length})</span>
+              </label>
+
+              <div className="admin-actions">
+                <button
+                  className="secondary-btn"
+                  type="button"
+                  disabled={adminActionLoading || selectedBookIds.length === 0}
+                  onClick={() => handleBulkAction("feature")}
+                >
+                  Feature Selected
+                </button>
+
+                <button
+                  className="secondary-btn"
+                  type="button"
+                  disabled={adminActionLoading || selectedBookIds.length === 0}
+                  onClick={() => handleBulkAction("unfeature")}
+                >
+                  Unfeature Selected
+                </button>
+
+                <button
+                  className="secondary-btn"
+                  type="button"
+                  disabled={adminActionLoading || selectedBookIds.length === 0}
+                  onClick={() => handleBulkAction("hide")}
+                >
+                  Hide Selected
+                </button>
+
+                <button
+                  className="secondary-btn"
+                  type="button"
+                  disabled={adminActionLoading || selectedBookIds.length === 0}
+                  onClick={() => handleBulkAction("unhide")}
+                >
+                  Unhide Selected
+                </button>
+
+                <button
+                  className="danger-btn"
+                  type="button"
+                  disabled={adminActionLoading || selectedBookIds.length === 0}
+                  onClick={() => handleBulkAction("delete")}
+                >
+                  Delete Selected
+                </button>
+              </div>
             </div>
 
             {adminError && <p className="error-text">{adminError}</p>}
@@ -390,14 +678,18 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
               <p className="message-text">Loading admin data...</p>
             ) : (
               <div className="admin-table-wrap">
-                <table className="admin-table">
+                <table className="admin-table admin-table-books">
                   <thead>
                     <tr>
+                      <th>Select</th>
                       <th>Cover</th>
                       <th>Title</th>
                       <th>Author</th>
                       <th>Format</th>
+                      <th>Status</th>
                       <th>Readers</th>
+                      <th>Completion</th>
+                      <th>Storage</th>
                       <th>Created</th>
                       <th>Actions</th>
                     </tr>
@@ -405,15 +697,55 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
                   <tbody>
                     {filteredAdminBooks.map((book) => (
                       <tr key={book.BookId}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedBookIds.includes(book.BookId)}
+                            onChange={() => toggleBookSelection(book.BookId)}
+                          />
+                        </td>
                         <td className="admin-cover-cell">
                           <div className="admin-cover-mini">
                             <BookCover book={book} />
                           </div>
                         </td>
-                        <td>{book.Title}</td>
+                        <td>
+                          <div className="admin-title-cell">
+                            <strong>{book.Title}</strong>
+                            {book.Description && <span>{book.Description}</span>}
+                          </div>
+                        </td>
                         <td>{book.Author || "Unknown"}</td>
                         <td>{(book.FileType || "").toUpperCase()}</td>
-                        <td>{book.ActiveReaders || 0}</td>
+                        <td>
+                          <div className="status-pill-row">
+                            <span className={`user-role-pill ${book.IsHidden ? "role-hidden" : "role-visible"}`}>
+                              {book.IsHidden ? "Hidden" : "Visible"}
+                            </span>
+                            <span className={`user-role-pill ${book.IsFeatured ? "role-admin" : "role-user"}`}>
+                              {book.IsFeatured ? "Featured" : "Standard"}
+                            </span>
+                          </div>
+                        </td>
+                        <td>
+                          <div>{book.ActiveReaders || 0} active</div>
+                          <div className="table-subtext">
+                            {book.CompletedReaders || 0} completed
+                          </div>
+                        </td>
+                        <td>
+                          <div>{formatPercent(book.AverageCompletionPercentage).toFixed(1)}%</div>
+                          <div className="table-subtext">
+                            {book.ProgressEntries || 0} progress saves
+                          </div>
+                        </td>
+                        <td>
+                          <div>{formatBytes(book.TotalStorageBytes || 0)}</div>
+                          <div className="table-subtext">
+                            File {formatBytes(book.FileSizeBytes || 0)} | Cover{" "}
+                            {formatBytes(book.CoverSizeBytes || 0)}
+                          </div>
+                        </td>
                         <td>{formatDate(book.CreatedAt)}</td>
                         <td>
                           <div className="admin-actions">
@@ -431,6 +763,24 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
                               type="button"
                             >
                               Edit
+                            </button>
+
+                            <button
+                              className="secondary-btn"
+                              onClick={() => handleFeatureSingleBook(book)}
+                              type="button"
+                              disabled={adminActionLoading}
+                            >
+                              {book.IsFeatured ? "Unfeature" : "Feature"}
+                            </button>
+
+                            <button
+                              className="secondary-btn"
+                              onClick={() => handleHideSingleBook(book)}
+                              type="button"
+                              disabled={adminActionLoading}
+                            >
+                              {book.IsHidden ? "Unhide" : "Hide"}
                             </button>
 
                             <label className="secondary-btn admin-file-label">
@@ -472,7 +822,7 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
 
                     {filteredAdminBooks.length === 0 && (
                       <tr>
-                        <td colSpan="7" className="admin-empty-cell">
+                        <td colSpan="11" className="admin-empty-cell">
                           No books found.
                         </td>
                       </tr>
@@ -670,6 +1020,18 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
               <div className="summary-chip">Readers: {bookReaders.length}</div>
               <div className="summary-chip">Active: {totalActiveReaders}</div>
               <div className="summary-chip">Completed: {totalCompletedReaders}</div>
+              <div className="summary-chip">
+                Avg completion:{" "}
+                {bookReaders.length
+                  ? (
+                      bookReaders.reduce(
+                        (sum, reader) => sum + formatPercent(reader.Percentage),
+                        0
+                      ) / bookReaders.length
+                    ).toFixed(1)
+                  : "0.0"}
+                %
+              </div>
             </div>
 
             {bookReadersError && <p className="error-text">{bookReadersError}</p>}

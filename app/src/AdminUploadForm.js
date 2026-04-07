@@ -11,6 +11,10 @@ export default function AdminUploadForm({ onUploadSuccess }) {
   const [message, setMessage] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [isHidden, setIsHidden] = useState(false)
+  const [isFeatured, setIsFeatured] = useState(false)
+  const [featuredRank, setFeaturedRank] = useState("")
 
   const handleCoverChange = (file) => {
     setCoverImage(file || null)
@@ -45,7 +49,18 @@ export default function AdminUploadForm({ onUploadSuccess }) {
         formData.append("coverImage", coverImage)
       }
 
-      await uploadAdminBook(formData)
+      formData.append("isHidden", String(isHidden))
+      formData.append("isFeatured", String(isFeatured))
+
+      if (isFeatured && featuredRank) {
+        formData.append("featuredRank", featuredRank)
+      }
+
+      setUploadProgress(0)
+
+      await uploadAdminBook(formData, {
+        onProgress: (value) => setUploadProgress(value)
+      })
 
       setMessage("Book uploaded successfully")
       setTitle("")
@@ -54,6 +69,10 @@ export default function AdminUploadForm({ onUploadSuccess }) {
       setBookFile(null)
       setCoverImage(null)
       setCoverPreview("")
+      setIsHidden(false)
+      setIsFeatured(false)
+      setFeaturedRank("")
+      setUploadProgress(100)
 
       if (onUploadSuccess) {
         onUploadSuccess()
@@ -112,6 +131,50 @@ export default function AdminUploadForm({ onUploadSuccess }) {
               onChange={(e) => handleCoverChange(e.target.files?.[0] || null)}
             />
           </div>
+
+          <label className="admin-checkbox-row">
+            <input
+              type="checkbox"
+              checked={isFeatured}
+              onChange={(e) => setIsFeatured(e.target.checked)}
+            />
+            <span>Mark as featured after upload</span>
+          </label>
+
+          {isFeatured && (
+            <input
+              className="input"
+              type="number"
+              min="1"
+              placeholder="Featured order (optional)"
+              value={featuredRank}
+              onChange={(e) => setFeaturedRank(e.target.value)}
+            />
+          )}
+
+          <label className="admin-checkbox-row">
+            <input
+              type="checkbox"
+              checked={isHidden}
+              onChange={(e) => setIsHidden(e.target.checked)}
+            />
+            <span>Upload as hidden</span>
+          </label>
+
+          {loading && (
+            <div className="upload-progress-block">
+              <div className="upload-progress-header">
+                <span>Uploading</span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div className="book-progress-bar">
+                <div
+                  className="book-progress-fill"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+            </div>
+          )}
 
           <button className="primary-btn" type="submit" disabled={loading}>
             {loading ? "Uploading..." : "Upload Book"}

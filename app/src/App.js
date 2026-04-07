@@ -54,11 +54,26 @@ function formatSavedProgressLabel(progress, fileType) {
   if (progressFormat === "epub") {
     const percentage = formatPercent(progress.Percentage)
     return percentage > 0
-      ? `Saved location: ${percentage.toFixed(1)}%`
-      : "Saved location in EPUB"
+      ? `Page ${Math.max(1, Math.round(percentage))}`
+      : "Page saved"
   }
 
-  return `Saved: ${progress.ProgressValue}`
+  const parsedPage = parseInt(progress.ProgressValue, 10)
+  return Number.isNaN(parsedPage) ? "Saved position" : `Page ${parsedPage}`
+}
+
+function getReadingStatus(book) {
+  const percentage = formatPercent(book.progress?.Percentage)
+
+  if (percentage >= 100) return "Completed"
+  if (percentage > 0) return "In progress"
+  return "Ready to start"
+}
+
+function getPreviewText(value, limit = 120) {
+  if (!value) return ""
+  if (value.length <= limit) return value
+  return `${value.slice(0, limit).trim()}...`
 }
 
 function App() {
@@ -82,9 +97,12 @@ function App() {
   const [searchTerm, setSearchTerm] = useState("")
   const [formatFilter, setFormatFilter] = useState("all")
   const [sortBy, setSortBy] = useState("recent")
+  const [expandedLibraryDescriptions, setExpandedLibraryDescriptions] = useState({})
 
   const token = getToken()
   const readerShellRef = useRef(null)
+  const pdfWrapRef = useRef(null)
+  const pendingPdfScrollTopRef = useRef(null)
 
   const resetReaderState = useCallback(() => {
     setSelectedBook(null)
@@ -248,6 +266,11 @@ function App() {
     setNumPages(loadedPageCount)
     setPdfReady(true)
 
+    if (pdfWrapRef.current && pendingPdfScrollTopRef.current != null) {
+      pdfWrapRef.current.scrollTop = pendingPdfScrollTopRef.current
+      pendingPdfScrollTopRef.current = null
+    }
+
     setReadingProgress((prev) => {
       if (prev.format === "pdf" && prev.progressValue === String(currentPage)) {
         return prev
@@ -271,6 +294,11 @@ function App() {
       if (!pdfReady || !numPages) return
 
       const safePage = Math.max(1, Math.min(numPages, pageNumber))
+
+      if (pdfWrapRef.current) {
+        pendingPdfScrollTopRef.current = pdfWrapRef.current.scrollTop
+      }
+
       setCurrentPage(safePage)
       setPdfPageInput(String(safePage))
       setReadingProgress({
@@ -420,27 +448,31 @@ function App() {
     return result
   }, [books, searchTerm, formatFilter, sortBy])
 
-  const lastOpenedBook = useMemo(() => {
-    const withProgress = books
-      .filter((book) => book.progress?.UpdatedAt)
+  const featuredBooks = useMemo(() => {
+    return [...books]
+      .filter((book) => book.IsFeatured)
+      .sort((a, b) => {
+        const aRank = Number.isFinite(Number(a.FeaturedRank)) ? Number(a.FeaturedRank) : 999999
+        const bRank = Number.isFinite(Number(b.FeaturedRank)) ? Number(b.FeaturedRank) : 999999
+
+        if (aRank !== bRank) {
+          return aRank - bRank
+        }
+
+        return new Date(b.CreatedAt || 0).getTime() - new Date(a.CreatedAt || 0).getTime()
+      })
+      .slice(0, 4)
+  }, [books])
+
+  const continueReadingBooks = useMemo(() => {
+    return [...books]
+      .filter((book) => formatPercent(book.progress?.Percentage) > 0)
       .sort(
         (a, b) =>
-          new Date(b.progress.UpdatedAt).getTime() -
-          new Date(a.progress.UpdatedAt).getTime()
+          new Date(b.progress?.UpdatedAt || 0).getTime() -
+          new Date(a.progress?.UpdatedAt || 0).getTime()
       )
-
-    return withProgress[0] || null
-  }, [books])
-
-  const completedBooksCount = useMemo(() => {
-    return books.filter((book) => formatPercent(book.progress?.Percentage) >= 100).length
-  }, [books])
-
-  const inProgressBooksCount = useMemo(() => {
-    return books.filter((book) => {
-      const percentage = formatPercent(book.progress?.Percentage)
-      return percentage > 0 && percentage < 100
-    }).length
+      .slice(0, 4)
   }, [books])
 
   if (!currentUser) {
@@ -506,28 +538,73 @@ function App() {
 
       {currentPageView === "library" && !selectedBook && (
         <>
-          <div className="dashboard-stats">
-            <div className="stat-card">
-              <div className="stat-label">Books in library</div>
-              <div className="stat-value">{books.length}</div>
-            </div>
+          {featuredBooks.length > 0 && (
+            <div className="featured-section">
+              <div className="section-header">
+                <div>
+                  <div className="eyebrow-text">Curated Selection</div>
+                  <h2 className="section-title">Featured Books</h2>
+                </div>
+              </div>
 
-            <div className="stat-card">
-              <div className="stat-label">Continue reading</div>
-              <div className="stat-value">{inProgressBooksCount}</div>
-            </div>
+              <div className="featured-grid">
+                {featuredBooks.map((book) => (
+                  <div key={book.BookId} className="featured-card">
+                    <div className="featured-cover-wrap">
+                      <BookCover book={book} />
+                    </div>
 
-            <div className="stat-card">
-              <div className="stat-label">Completed</div>
-              <div className="stat-value">{completedBooksCount}</div>
+                    <div className="featured-body">
+                      <div className="featured-badge-row">
+                        <span className="featured-badge">Featured</span>
+                        <span className="featured-status">{getReadingStatus(book)}</span>
+                      </div>
+
+                      <h3 className="featured-title">{book.Title}</h3>
+                      <p className="featured-author">{book.Author || "Unknown"}</p>
+                      <p className="featured-description">
+                        {book.Description || "A curated read waiting in your library."}
+                      </p>
+
+                      <div className="book-progress-block featured-progress-block">
+                        <div className="book-progress-header">
+                          <span>Progress</span>
+                          <span>{formatPercent(book.progress?.Percentage).toFixed(1)}%</span>
+                        </div>
+
+                        <div className="book-progress-bar">
+                          <div
+                            className="book-progress-fill"
+                            style={{ width: `${formatPercent(book.progress?.Percentage)}%` }}
+                          />
+                        </div>
+
+                        <div className="book-progress-meta">
+                          {formatSavedProgressLabel(book.progress, book.FileType)}
+                        </div>
+                      </div>
+
+                      <button
+                        className="primary-btn"
+                        onClick={() => openBook(book)}
+                        type="button"
+                      >
+                        {formatPercent(book.progress?.Percentage) > 0
+                          ? "Resume Reading"
+                          : "Read Book"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="library-toolbar">
             <input
               className="input toolbar-input"
               type="text"
-              placeholder="Search by title, author, description, or format..."
+              placeholder="Search by title, author, or description..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
@@ -554,55 +631,74 @@ function App() {
             </select>
           </div>
 
-          {lastOpenedBook && (
+          {continueReadingBooks.length > 0 && (
             <div className="continue-section">
               <div className="section-header">
-                <h2 className="section-title">Resume Reading</h2>
+                <div>
+                  <div className="eyebrow-text">Momentum</div>
+                  <h2 className="section-title">Continue Reading</h2>
+                </div>
               </div>
 
-              <div className="continue-grid continue-grid-single">
-                <div className="continue-card">
-                  <div className="continue-cover">
-                    <BookCover book={lastOpenedBook} />
-                  </div>
-
-                  <div className="continue-body">
-                    <div className="continue-title">{lastOpenedBook.Title}</div>
-                    <div className="continue-meta">
-                      {lastOpenedBook.Author || "Unknown"} |{" "}
-                      {(lastOpenedBook.FileType || "").toUpperCase()}
+              <div className="continue-grid continue-grid-multi">
+                {continueReadingBooks.map((book, index) => (
+                  <div
+                    key={book.BookId}
+                    className={`continue-card ${index === 0 ? "continue-card-hero" : ""}`}
+                  >
+                    <div className="continue-cover">
+                      <BookCover book={book} />
                     </div>
 
-                    <div className="mini-progress-row">
-                      <div className="mini-progress-bar">
-                        <div
-                          className="mini-progress-fill"
-                          style={{
-                            width: `${formatPercent(lastOpenedBook.progress?.Percentage)}%`
-                          }}
-                        />
+                    <div className="continue-body">
+                      <div className="continue-title">{book.Title}</div>
+                      <div className="continue-meta">
+                        {book.Author || "Unknown"}
                       </div>
-                      <span className="mini-progress-text">
-                        {formatPercent(lastOpenedBook.progress?.Percentage).toFixed(1)}%
-                      </span>
-                    </div>
 
-                    <div className="continue-date">
-                      Last opened: {formatDate(lastOpenedBook.progress?.UpdatedAt) || "Recently"}
-                    </div>
+                      <div className="mini-progress-row">
+                        <div className="mini-progress-bar">
+                          <div
+                            className="mini-progress-fill"
+                            style={{
+                              width: `${formatPercent(book.progress?.Percentage)}%`
+                            }}
+                          />
+                        </div>
+                        <span className="mini-progress-text">
+                          {formatPercent(book.progress?.Percentage).toFixed(1)}%
+                        </span>
+                      </div>
 
-                    <button className="primary-btn" onClick={() => openBook(lastOpenedBook)} type="button">
-                      Resume Reading
-                    </button>
+                      <div className="continue-date">
+                        {formatSavedProgressLabel(book.progress, book.FileType)}
+                      </div>
+                      <div className="continue-date">
+                        Last opened: {formatDate(book.progress?.UpdatedAt) || "Recently"}
+                      </div>
+
+                      <button
+                        className="primary-btn"
+                        onClick={() => openBook(book)}
+                        type="button"
+                      >
+                        Resume Reading
+                      </button>
+                    </div>
                   </div>
-                </div>
+                ))}
               </div>
             </div>
           )}
 
           <div>
             <div className="section-header">
-              <h2 className="section-title">Library</h2>
+              <div>
+                <h2 className="section-title">Library</h2>
+                <p className="section-subtitle">
+                  Browse by cover first, then hover or tap to reveal the details.
+                </p>
+              </div>
             </div>
 
             {booksError && <p className="error-text">{booksError}</p>}
@@ -629,52 +725,67 @@ function App() {
                   const percentage = formatPercent(book.progress?.Percentage)
                   const hasProgress = percentage > 0
                   const isCompleted = percentage >= 100
+                  const description = book.Description || "No description"
+                  const isDescriptionExpanded = !!expandedLibraryDescriptions[book.BookId]
+                  const shouldShowDescriptionToggle = description.length > 120
 
                   return (
-                    <div key={book.BookId} className="book-card premium-book-card">
+                    <div
+                      key={book.BookId}
+                      className="book-card premium-book-card library-hover-card"
+                      onClick={() => openBook(book)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault()
+                          openBook(book)
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                    >
                       <BookCover book={book} />
 
-                      <div className="book-card-top">
-                        <div className="format-pill">{book.FileType}</div>
+                      <div className="library-card-nameplate">
+                        <div className="library-card-name">{book.Title}</div>
                       </div>
 
-                      <h3 className="book-title">{book.Title}</h3>
+                      <div className="library-card-overlay">
+                        <h3 className="book-title">{book.Title}</h3>
 
-                      <p className="book-meta">
-                        <strong>Author:</strong> {book.Author || "Unknown"}
-                      </p>
+                        <p className="book-meta">
+                          {book.Author || "Unknown"}
+                        </p>
 
-                      <p className="book-description">
-                        {book.Description || "No description"}
-                      </p>
+                        <p
+                          className={`book-description ${
+                            isDescriptionExpanded ? "book-description-expanded" : ""
+                          }`}
+                        >
+                          {isDescriptionExpanded
+                            ? description
+                            : getPreviewText(description, 120)}
+                        </p>
 
-                      <div className="book-progress-block">
-                        <div className="book-progress-header">
-                          <span>
-                            {isCompleted
-                              ? "Completed"
-                              : hasProgress
-                              ? "Reading progress"
-                              : "Not started"}
-                          </span>
-                          <span>{percentage.toFixed(1)}%</span>
-                        </div>
+                        {shouldShowDescriptionToggle && (
+                          <button
+                            className="text-btn"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setExpandedLibraryDescriptions((current) => ({
+                                ...current,
+                                [book.BookId]: !current[book.BookId]
+                              }))
+                            }}
+                          >
+                            {isDescriptionExpanded ? "See Less" : "See More"}
+                          </button>
+                        )}
 
-                        <div className="book-progress-bar">
-                          <div
-                            className="book-progress-fill"
-                            style={{ width: `${percentage}%` }}
-                          />
-                        </div>
-
-                        <div className="book-progress-meta">
-                          {formatSavedProgressLabel(book.progress, book.FileType)}
+                        <div className="library-card-cta">
+                          {hasProgress && !isCompleted ? "Resume Reading" : "Read Book"}
                         </div>
                       </div>
-
-                      <button className="primary-btn" onClick={() => openBook(book)} type="button">
-                        {hasProgress && !isCompleted ? "Resume Reading" : "Read Book"}
-                      </button>
                     </div>
                   )
                 })}
@@ -695,10 +806,11 @@ function App() {
                 Back to Library
               </button>
 
-              <div>
+              <div className="reader-heading-block">
+                <div className="reader-eyebrow">Reading now</div>
                 <h2 className="reader-title">{selectedBook.Title}</h2>
                 <p className="reader-meta">
-                  {selectedBook.Author || "Unknown"} | {selectedBook.FileType}
+                  {selectedBook.Author || "Unknown"}
                 </p>
               </div>
             </div>
@@ -754,7 +866,7 @@ function App() {
                 </div>
               </div>
 
-              <div className="pdf-wrap">
+              <div ref={pdfWrapRef} className="pdf-wrap">
                 {!pdfReady && (
                   <div className="reader-loading-overlay">
                     <div className="reader-spinner" />
@@ -790,7 +902,6 @@ function App() {
                 bookTitle={selectedBook.Title}
                 bookAuthor={selectedBook.Author}
                 isFullscreen={isReaderFullscreen}
-                onToggleFullscreen={toggleFullscreen}
               />
             </div>
           )}

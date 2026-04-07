@@ -128,6 +128,8 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
   const [bookReadersLoading, setBookReadersLoading] = useState(false)
   const [bookReadersError, setBookReadersError] = useState("")
   const [adminActionLoading, setAdminActionLoading] = useState(false)
+  const [showStatsPanel, setShowStatsPanel] = useState(false)
+  const [showUploadPanel, setShowUploadPanel] = useState(false)
 
   const fetchAdminBooks = useCallback(async () => {
     try {
@@ -466,99 +468,33 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
 
   return (
     <div className="admin-overhaul">
-      <div className="admin-stats-grid admin-stats-grid-wide">
-        <div className="stat-card">
-          <div className="stat-label">Total books</div>
-          <div className="stat-value">{adminStats?.TotalBooks || 0}</div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-label">Visible books</div>
-          <div className="stat-value">{adminStats?.TotalVisibleBooks || 0}</div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-label">Hidden books</div>
-          <div className="stat-value">{adminStats?.TotalHiddenBooks || 0}</div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-label">Featured books</div>
-          <div className="stat-value">{adminStats?.TotalFeaturedBooks || 0}</div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-label">Storage used</div>
-          <div className="stat-value stat-value-compact">
-            {formatBytes(adminStats?.TotalStorageBytes || 0)}
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-label">Average completion</div>
-          <div className="stat-value stat-value-compact">
-            {formatPercent(adminStats?.AverageCompletionPercentage).toFixed(1)}%
-          </div>
-        </div>
-      </div>
-
-      <div className="admin-highlights-grid">
-        <div className="admin-card">
-          <div className="section-header">
-            <h2 className="section-title">Recently Uploaded</h2>
-          </div>
-
-          <div className="highlight-list">
-            {adminHighlights.recentlyUploadedBooks?.map((book) => (
-              <div key={book.BookId} className="highlight-row">
-                <div>
-                  <div className="highlight-title">{book.Title}</div>
-                  <div className="highlight-meta">
-                    {book.Author || "Unknown"} | {formatDate(book.CreatedAt)}
-                  </div>
-                </div>
-                <div className="summary-chip">{(book.FileType || "").toUpperCase()}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="admin-card">
-          <div className="section-header">
-            <h2 className="section-title">Most Read Books</h2>
-          </div>
-
-          <div className="highlight-list">
-            {adminHighlights.mostReadBooks?.map((book) => (
-              <div key={book.BookId} className="highlight-row">
-                <div>
-                  <div className="highlight-title">{book.Title}</div>
-                  <div className="highlight-meta">
-                    {book.ActiveReaders || 0} readers |{" "}
-                    {formatPercent(book.AverageCompletionPercentage).toFixed(1)}% avg completion
-                  </div>
-                </div>
-                <div className="summary-chip">{formatBytes(book.TotalStorageBytes || 0)}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="admin-card">
-        <h2 className="section-title">Upload New Book</h2>
-        <AdminUploadForm
-          onUploadSuccess={async () => {
-            await refreshAdminAndLibrary()
-          }}
-        />
-      </div>
-
       <div className="admin-card">
         <div className="section-header">
-          <h2 className="section-title">Admin Workspace</h2>
+          <div>
+            <h2 className="section-title">Admin Workspace</h2>
+            <p className="admin-panel-subtitle">
+              Manage books, users, visibility, and reading activity from one place.
+            </p>
+          </div>
 
-          <div className="admin-tab-row">
+          <div className="admin-header-actions">
+            <button
+              className="secondary-btn"
+              onClick={() => setShowStatsPanel(true)}
+              type="button"
+            >
+              Stats
+            </button>
+
+            <button
+              className="primary-btn"
+              onClick={() => setShowUploadPanel(true)}
+              type="button"
+            >
+              Upload Book
+            </button>
+
+            <div className="admin-tab-row">
             <button
               className={`secondary-btn ${activeAdminTab === "books" ? "active-tab" : ""}`}
               onClick={() => setActiveAdminTab("books")}
@@ -574,6 +510,7 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
             >
               Users
             </button>
+            </div>
           </div>
         </div>
 
@@ -729,7 +666,6 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
                         <td>
                           <div className="admin-title-cell">
                             <strong>{book.Title}</strong>
-                            {book.Description && <span>{book.Description}</span>}
                           </div>
                         </td>
                         <td>{book.Author || "Unknown"}</td>
@@ -1009,6 +945,141 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {showUploadPanel && (
+        <div className="modal-overlay" onClick={() => setShowUploadPanel(false)}>
+          <div className="modal-card admin-popout-card" onClick={(e) => e.stopPropagation()}>
+            <div className="section-header">
+              <div>
+                <h3 className="section-title">Upload New Book</h3>
+                <p className="admin-modal-subtitle">
+                  Add a new title with its file and optional custom cover.
+                </p>
+              </div>
+
+              <button
+                className="secondary-btn"
+                onClick={() => setShowUploadPanel(false)}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+
+            <AdminUploadForm
+              onUploadSuccess={async () => {
+                await refreshAdminAndLibrary()
+                setShowUploadPanel(false)
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {showStatsPanel && (
+        <div className="modal-overlay" onClick={() => setShowStatsPanel(false)}>
+          <div
+            className="modal-card modal-card-wide admin-popout-card admin-stats-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="section-header">
+              <div>
+                <h3 className="section-title">Library Stats</h3>
+                <p className="admin-modal-subtitle">
+                  Snapshot of catalog size, storage, and reading trends.
+                </p>
+              </div>
+
+              <button
+                className="secondary-btn"
+                onClick={() => setShowStatsPanel(false)}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="admin-stats-grid admin-stats-popout-grid">
+              <div className="stat-card">
+                <div className="stat-label">Total books</div>
+                <div className="stat-value">{adminStats?.TotalBooks || 0}</div>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-label">Visible books</div>
+                <div className="stat-value">{adminStats?.TotalVisibleBooks || 0}</div>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-label">Hidden books</div>
+                <div className="stat-value">{adminStats?.TotalHiddenBooks || 0}</div>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-label">Featured books</div>
+                <div className="stat-value">{adminStats?.TotalFeaturedBooks || 0}</div>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-label">Storage used</div>
+                <div className="stat-value stat-value-compact">
+                  {formatBytes(adminStats?.TotalStorageBytes || 0)}
+                </div>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-label">Average completion</div>
+                <div className="stat-value stat-value-compact">
+                  {formatPercent(adminStats?.AverageCompletionPercentage).toFixed(1)}%
+                </div>
+              </div>
+            </div>
+
+            <div className="admin-highlights-grid">
+              <div className="admin-card admin-card-subtle">
+                <div className="section-header">
+                  <h2 className="section-title">Recently Uploaded</h2>
+                </div>
+
+                <div className="highlight-list">
+                  {adminHighlights.recentlyUploadedBooks?.map((book) => (
+                    <div key={book.BookId} className="highlight-row">
+                      <div>
+                        <div className="highlight-title">{book.Title}</div>
+                        <div className="highlight-meta">
+                          {book.Author || "Unknown"} | {formatDate(book.CreatedAt)}
+                        </div>
+                      </div>
+                      <div className="summary-chip">{(book.FileType || "").toUpperCase()}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="admin-card admin-card-subtle">
+                <div className="section-header">
+                  <h2 className="section-title">Most Read Books</h2>
+                </div>
+
+                <div className="highlight-list">
+                  {adminHighlights.mostReadBooks?.map((book) => (
+                    <div key={book.BookId} className="highlight-row">
+                      <div>
+                        <div className="highlight-title">{book.Title}</div>
+                        <div className="highlight-meta">
+                          {book.ActiveReaders || 0} readers |{" "}
+                          {formatPercent(book.AverageCompletionPercentage).toFixed(1)}% avg completion
+                        </div>
+                      </div>
+                      <div className="summary-chip">{formatBytes(book.TotalStorageBytes || 0)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

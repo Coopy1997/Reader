@@ -10,8 +10,7 @@ export default function EpubReader({
   bookId,
   bookTitle,
   bookAuthor,
-  isFullscreen,
-  onToggleFullscreen
+  isFullscreen
 }) {
   const viewerRef = useRef(null)
   const bookRef = useRef(null)
@@ -42,6 +41,36 @@ export default function EpubReader({
         })
 
         renditionRef.current = rendition
+
+        rendition.themes.default({
+          body: {
+            background: "#f8f5ef !important",
+            color: "#1b1b1b !important",
+            "font-family": "Georgia, serif !important",
+            "line-height": "1.7 !important"
+          },
+          p: {
+            color: "#1b1b1b !important"
+          },
+          div: {
+            color: "#1b1b1b !important"
+          },
+          span: {
+            color: "#1b1b1b !important"
+          },
+          h1: {
+            color: "#111111 !important"
+          },
+          h2: {
+            color: "#111111 !important"
+          },
+          h3: {
+            color: "#111111 !important"
+          },
+          a: {
+            color: "#8b0000 !important"
+          }
+        })
 
         await book.ready
         await book.locations.generate(1000)
@@ -175,9 +204,6 @@ export default function EpubReader({
 
         <div className="epub-toolbar-right">
           <div className="progress-text">{progressPercent.toFixed(1)}% read</div>
-          <button className="secondary-btn" onClick={onToggleFullscreen}>
-            {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
-          </button>
         </div>
       </div>
 

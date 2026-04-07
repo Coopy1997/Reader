@@ -70,15 +70,10 @@ function getReadingStatus(book) {
   return "Ready to start"
 }
 
-function getPreviewText(value, limit = 120) {
-  if (!value) return ""
-  if (value.length <= limit) return value
-  return `${value.slice(0, limit).trim()}...`
-}
-
 function App() {
   const [books, setBooks] = useState([])
   const [selectedBook, setSelectedBook] = useState(null)
+  const [detailBook, setDetailBook] = useState(null)
   const [booksError, setBooksError] = useState("")
   const [loadingBooks, setLoadingBooks] = useState(false)
   const [currentPageView, setCurrentPageView] = useState("library")
@@ -97,7 +92,15 @@ function App() {
   const [searchTerm, setSearchTerm] = useState("")
   const [formatFilter, setFormatFilter] = useState("all")
   const [sortBy, setSortBy] = useState("recent")
-  const [expandedLibraryDescriptions, setExpandedLibraryDescriptions] = useState({})
+  const [readerReturnPage, setReaderReturnPage] = useState("library")
+  const [readerSettingsOpen, setReaderSettingsOpen] = useState(false)
+  const [readerSettings, setReaderSettings] = useState({
+    pdfScale: 1,
+    pdfTheme: "dark",
+    epubFontSize: 100,
+    epubLineHeight: 1.7,
+    epubTheme: "paper"
+  })
 
   const token = getToken()
   const readerShellRef = useRef(null)
@@ -117,6 +120,7 @@ function App() {
       percentage: 0
     })
     setIsReaderFullscreen(false)
+    setReaderSettingsOpen(false)
   }, [])
 
   const logout = useCallback(() => {
@@ -125,6 +129,7 @@ function App() {
     setBooks([])
     setBooksError("")
     setCurrentPageView("library")
+    setDetailBook(null)
     resetReaderState()
 
     if (document.fullscreenElement) {
@@ -374,18 +379,31 @@ function App() {
     }
   }
 
-  const openBook = (book) => {
+  const openBook = (book, returnPage = currentPageView) => {
     setSelectedBook(book)
+    setReaderReturnPage(returnPage)
+    setReaderSettingsOpen(false)
     setCurrentPageView("reader")
+  }
+
+  const openBookDetails = (book, sourcePage = currentPageView) => {
+    setDetailBook(book)
+    setCurrentPageView("detail")
+    setReaderReturnPage(sourcePage)
   }
 
   const closeBook = () => {
     resetReaderState()
-    setCurrentPageView("library")
+    setCurrentPageView(readerReturnPage || "library")
 
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {})
     }
+  }
+
+  const closeBookDetails = () => {
+    setDetailBook(null)
+    setCurrentPageView(readerReturnPage || "home")
   }
 
   const handleAuthSuccess = (user) => {
@@ -393,6 +411,7 @@ function App() {
     setBooks([])
     setBooksError("")
     setCurrentPageView("library")
+    setDetailBook(null)
     resetReaderState()
   }
 
@@ -505,7 +524,10 @@ function App() {
           <div className="topbar-actions">
             <button
               className={`secondary-btn ${currentPageView === "library" ? "active-tab" : ""}`}
-              onClick={() => setCurrentPageView("library")}
+              onClick={() => {
+                setDetailBook(null)
+                setCurrentPageView("library")
+              }}
               type="button"
             >
               Library
@@ -514,7 +536,10 @@ function App() {
             {currentUser.role === "admin" && (
               <button
                 className={`secondary-btn ${currentPageView === "admin" ? "active-tab" : ""}`}
-                onClick={() => setCurrentPageView("admin")}
+                onClick={() => {
+                  setDetailBook(null)
+                  setCurrentPageView("admin")
+                }}
                 type="button"
               >
                 Admin Panel
@@ -534,6 +559,63 @@ function App() {
 
       {currentPageView === "admin" && currentUser.role === "admin" && (
         <AdminPanel currentUser={currentUser} onLibraryRefresh={fetchBooks} />
+      )}
+
+      {currentPageView === "detail" && detailBook && !selectedBook && (
+        <div className="detail-page">
+          <button className="secondary-btn" onClick={closeBookDetails} type="button">
+            Back
+          </button>
+
+          <div className="detail-layout">
+            <div className="detail-cover">
+              <BookCover book={detailBook} />
+            </div>
+
+            <div className="detail-body">
+              <div className="eyebrow-text">Book Details</div>
+              <h2 className="detail-title">{detailBook.Title}</h2>
+              <p className="detail-author">{detailBook.Author || "Unknown"}</p>
+              <p className="detail-description">
+                {detailBook.Description || "No description available for this title yet."}
+              </p>
+
+              <div className="detail-stats">
+                <div className="detail-stat">
+                  <span>Status</span>
+                  <strong>{getReadingStatus(detailBook)}</strong>
+                </div>
+                <div className="detail-stat">
+                  <span>Saved</span>
+                  <strong>{formatSavedProgressLabel(detailBook.progress, detailBook.FileType)}</strong>
+                </div>
+                <div className="detail-stat">
+                  <span>Progress</span>
+                  <strong>{formatPercent(detailBook.progress?.Percentage).toFixed(1)}%</strong>
+                </div>
+              </div>
+
+              <div className="detail-actions">
+                <button
+                  className="primary-btn"
+                  onClick={() => openBook(detailBook, "detail")}
+                  type="button"
+                >
+                  {formatPercent(detailBook.progress?.Percentage) > 0
+                    ? "Resume Reading"
+                    : "Start Reading"}
+                </button>
+                <button
+                  className="secondary-btn"
+                  onClick={() => setCurrentPageView("library")}
+                  type="button"
+                >
+                  Browse Library
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {currentPageView === "library" && !selectedBook && (
@@ -586,7 +668,7 @@ function App() {
 
                       <button
                         className="primary-btn"
-                        onClick={() => openBook(book)}
+                        onClick={() => openBook(book, "library")}
                         type="button"
                       >
                         {formatPercent(book.progress?.Percentage) > 0
@@ -679,10 +761,17 @@ function App() {
 
                       <button
                         className="primary-btn"
-                        onClick={() => openBook(book)}
+                        onClick={() => openBook(book, "library")}
                         type="button"
                       >
                         Resume Reading
+                      </button>
+                      <button
+                        className="secondary-btn"
+                        onClick={() => openBookDetails(book, "library")}
+                        type="button"
+                      >
+                        View Details
                       </button>
                     </div>
                   </div>
@@ -725,9 +814,6 @@ function App() {
                   const percentage = formatPercent(book.progress?.Percentage)
                   const hasProgress = percentage > 0
                   const isCompleted = percentage >= 100
-                  const description = book.Description || "No description"
-                  const isDescriptionExpanded = !!expandedLibraryDescriptions[book.BookId]
-                  const shouldShowDescriptionToggle = description.length > 120
 
                   return (
                     <div
@@ -756,31 +842,16 @@ function App() {
                           {book.Author || "Unknown"}
                         </p>
 
-                        <p
-                          className={`book-description ${
-                            isDescriptionExpanded ? "book-description-expanded" : ""
-                          }`}
+                        <button
+                          className="text-btn"
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            openBookDetails(book, "library")
+                          }}
                         >
-                          {isDescriptionExpanded
-                            ? description
-                            : getPreviewText(description, 120)}
-                        </p>
-
-                        {shouldShowDescriptionToggle && (
-                          <button
-                            className="text-btn"
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              setExpandedLibraryDescriptions((current) => ({
-                                ...current,
-                                [book.BookId]: !current[book.BookId]
-                              }))
-                            }}
-                          >
-                            {isDescriptionExpanded ? "See Less" : "See More"}
-                          </button>
-                        )}
+                          View Details
+                        </button>
 
                         <div className="library-card-cta">
                           {hasProgress && !isCompleted ? "Resume Reading" : "Read Book"}
@@ -816,11 +887,117 @@ function App() {
             </div>
 
             <div className="reader-toolbar-right">
+              <button
+                className={`secondary-btn ${readerSettingsOpen ? "active-tab" : ""}`}
+                onClick={() => setReaderSettingsOpen((prev) => !prev)}
+                type="button"
+              >
+                Settings
+              </button>
+
               <button className="secondary-btn" onClick={toggleFullscreen} type="button">
                 {isReaderFullscreen ? "Exit Fullscreen" : "Fullscreen"}
               </button>
             </div>
           </div>
+
+          {readerSettingsOpen && (
+            <div className="reader-settings-panel">
+              {selectedBook.FileType === "pdf" && (
+                <div className="reader-settings-grid">
+                  <label className="reader-setting">
+                    <span>Zoom</span>
+                    <input
+                      type="range"
+                      min="80"
+                      max="150"
+                      step="10"
+                      value={readerSettings.pdfScale * 100}
+                      onChange={(e) =>
+                        setReaderSettings((current) => ({
+                          ...current,
+                          pdfScale: Number(e.target.value) / 100
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="reader-setting">
+                    <span>Reading surface</span>
+                    <select
+                      className="input"
+                      value={readerSettings.pdfTheme}
+                      onChange={(e) =>
+                        setReaderSettings((current) => ({
+                          ...current,
+                          pdfTheme: e.target.value
+                        }))
+                      }
+                    >
+                      <option value="dark">Dark</option>
+                      <option value="paper">Paper</option>
+                    </select>
+                  </label>
+                </div>
+              )}
+
+              {selectedBook.FileType === "epub" && (
+                <div className="reader-settings-grid">
+                  <label className="reader-setting">
+                    <span>Font size</span>
+                    <input
+                      type="range"
+                      min="90"
+                      max="140"
+                      step="5"
+                      value={readerSettings.epubFontSize}
+                      onChange={(e) =>
+                        setReaderSettings((current) => ({
+                          ...current,
+                          epubFontSize: Number(e.target.value)
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="reader-setting">
+                    <span>Line height</span>
+                    <input
+                      type="range"
+                      min="1.4"
+                      max="2"
+                      step="0.1"
+                      value={readerSettings.epubLineHeight}
+                      onChange={(e) =>
+                        setReaderSettings((current) => ({
+                          ...current,
+                          epubLineHeight: Number(e.target.value)
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="reader-setting">
+                    <span>Theme</span>
+                    <select
+                      className="input"
+                      value={readerSettings.epubTheme}
+                      onChange={(e) =>
+                        setReaderSettings((current) => ({
+                          ...current,
+                          epubTheme: e.target.value
+                        }))
+                      }
+                    >
+                      <option value="paper">Paper</option>
+                      <option value="light">Light</option>
+                      <option value="sepia">Sepia</option>
+                    </select>
+                  </label>
+                </div>
+              )}
+            </div>
+          )}
 
           {selectedBook.FileType === "pdf" && (
             <div className="reader-card">
@@ -866,7 +1043,10 @@ function App() {
                 </div>
               </div>
 
-              <div ref={pdfWrapRef} className="pdf-wrap">
+              <div
+                ref={pdfWrapRef}
+                className={`pdf-wrap pdf-theme-${readerSettings.pdfTheme}`}
+              >
                 {!pdfReady && (
                   <div className="reader-loading-overlay">
                     <div className="reader-spinner" />
@@ -885,7 +1065,7 @@ function App() {
                   >
                     <Page
                       pageNumber={currentPage}
-                      width={isReaderFullscreen ? 1000 : 800}
+                      width={Math.round((isReaderFullscreen ? 1000 : 800) * readerSettings.pdfScale)}
                       renderAnnotationLayer={true}
                       renderTextLayer={true}
                     />
@@ -902,6 +1082,7 @@ function App() {
                 bookTitle={selectedBook.Title}
                 bookAuthor={selectedBook.Author}
                 isFullscreen={isReaderFullscreen}
+                settings={readerSettings}
               />
             </div>
           )}

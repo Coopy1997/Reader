@@ -10,7 +10,8 @@ export default function EpubReader({
   bookId,
   bookTitle,
   bookAuthor,
-  isFullscreen
+  isFullscreen,
+  settings
 }) {
   const viewerRef = useRef(null)
   const bookRef = useRef(null)
@@ -41,36 +42,6 @@ export default function EpubReader({
         })
 
         renditionRef.current = rendition
-
-        rendition.themes.default({
-          body: {
-            background: "#f8f5ef !important",
-            color: "#1b1b1b !important",
-            "font-family": "Georgia, serif !important",
-            "line-height": "1.7 !important"
-          },
-          p: {
-            color: "#1b1b1b !important"
-          },
-          div: {
-            color: "#1b1b1b !important"
-          },
-          span: {
-            color: "#1b1b1b !important"
-          },
-          h1: {
-            color: "#111111 !important"
-          },
-          h2: {
-            color: "#111111 !important"
-          },
-          h3: {
-            color: "#111111 !important"
-          },
-          a: {
-            color: "#8b0000 !important"
-          }
-        })
 
         await book.ready
         await book.locations.generate(1000)
@@ -136,6 +107,66 @@ export default function EpubReader({
       }
     }
   }, [bookId])
+
+  useEffect(() => {
+    if (!renditionRef.current) return
+
+    const themeMap = {
+      paper: {
+        background: "#f8f5ef",
+        color: "#1b1b1b",
+        link: "#8b0000"
+      },
+      light: {
+        background: "#ffffff",
+        color: "#171717",
+        link: "#b20710"
+      },
+      sepia: {
+        background: "#f1e7d3",
+        color: "#2b2117",
+        link: "#9f2b11"
+      }
+    }
+
+    const activeTheme = themeMap[settings?.epubTheme] || themeMap.paper
+    const fontSize = settings?.epubFontSize || 100
+    const lineHeight = settings?.epubLineHeight || 1.7
+
+    renditionRef.current.themes.default({
+      body: {
+        background: `${activeTheme.background} !important`,
+        color: `${activeTheme.color} !important`,
+        "font-family": "Georgia, serif !important",
+        "font-size": `${fontSize}% !important`,
+        "line-height": `${lineHeight} !important`
+      },
+      p: {
+        color: `${activeTheme.color} !important`,
+        "line-height": `${lineHeight} !important`
+      },
+      div: {
+        color: `${activeTheme.color} !important`
+      },
+      span: {
+        color: `${activeTheme.color} !important`
+      },
+      h1: {
+        color: `${activeTheme.color} !important`
+      },
+      h2: {
+        color: `${activeTheme.color} !important`
+      },
+      h3: {
+        color: `${activeTheme.color} !important`
+      },
+      a: {
+        color: `${activeTheme.link} !important`
+      }
+    })
+
+    renditionRef.current.themes.fontSize(`${fontSize}%`)
+  }, [settings])
 
   useEffect(() => {
     const onKeyDown = (e) => {

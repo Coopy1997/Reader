@@ -59,6 +59,23 @@ function getReaderStatus(reader) {
   return "Started"
 }
 
+function formatSavedPosition(reader, fallbackFileType) {
+  if (!reader?.ProgressValue) {
+    return "No saved position"
+  }
+
+  const format = (reader.Format || fallbackFileType || "").toLowerCase()
+
+  if (format === "epub") {
+    const percentage = formatPercent(reader.Percentage)
+    return percentage > 0
+      ? `Saved location: ${percentage.toFixed(1)}%`
+      : "Saved location in EPUB"
+  }
+
+  return `Page ${reader.ProgressValue}`
+}
+
 function sortBooks(books, adminSortBy) {
   const result = [...books]
 
@@ -1064,7 +1081,7 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
                         <td>{(reader.Format || selectedBookInsights.FileType || "").toUpperCase()}</td>
                         <td>{getReaderStatus(reader)}</td>
                         <td>{formatPercent(reader.Percentage).toFixed(1)}%</td>
-                        <td>{reader.ProgressValue || "No saved position"}</td>
+                        <td>{formatSavedPosition(reader, selectedBookInsights.FileType)}</td>
                         <td>{formatDate(reader.UpdatedAt)}</td>
                       </tr>
                     ))}

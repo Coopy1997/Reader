@@ -44,6 +44,23 @@ function formatDate(dateValue) {
   }).format(date)
 }
 
+function formatSavedProgressLabel(progress, fileType) {
+  if (!progress?.ProgressValue) {
+    return "No saved position"
+  }
+
+  const progressFormat = (progress.Format || fileType || "").toLowerCase()
+
+  if (progressFormat === "epub") {
+    const percentage = formatPercent(progress.Percentage)
+    return percentage > 0
+      ? `Saved location: ${percentage.toFixed(1)}%`
+      : "Saved location in EPUB"
+  }
+
+  return `Saved: ${progress.ProgressValue}`
+}
+
 function App() {
   const [books, setBooks] = useState([])
   const [selectedBook, setSelectedBook] = useState(null)
@@ -651,9 +668,7 @@ function App() {
                         </div>
 
                         <div className="book-progress-meta">
-                          {book.progress?.ProgressValue
-                            ? `Saved: ${book.progress.ProgressValue}`
-                            : "No saved position"}
+                          {formatSavedProgressLabel(book.progress, book.FileType)}
                         </div>
                       </div>
 

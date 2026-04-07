@@ -1,5 +1,5 @@
 import React, { useState } from "react"
-import { getApiBase, getAuthHeaders } from "./api"
+import { uploadAdminBook } from "./api"
 
 export default function AdminUploadForm({ onUploadSuccess }) {
   const [title, setTitle] = useState("")
@@ -45,17 +45,7 @@ export default function AdminUploadForm({ onUploadSuccess }) {
         formData.append("coverImage", coverImage)
       }
 
-      const response = await fetch(`${getApiBase()}/admin/books/upload`, {
-        method: "POST",
-        headers: getAuthHeaders(),
-        body: formData
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.message || "Upload failed")
-      }
+      await uploadAdminBook(formData)
 
       setMessage("Book uploaded successfully")
       setTitle("")

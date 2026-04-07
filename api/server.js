@@ -304,6 +304,54 @@ app.get("/admin/books", requireAuth, requireAdmin, async (req, res) => {
   }
 })
 
+app.get("/admin/books/:id/readers", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const bookId = req.params.id
+
+    await connectDB()
+
+    const bookResult = await sql.query`
+      SELECT BookId, Title, Author, FileType
+      FROM Books
+      WHERE BookId = ${bookId}
+    `
+
+    if (bookResult.recordset.length === 0) {
+      return res.status(404).json({ message: "Book not found" })
+    }
+
+    const readersResult = await sql.query`
+      SELECT
+        u.UserId,
+        u.Email,
+        u.Role,
+        rp.Format,
+        rp.ProgressValue,
+        rp.Percentage,
+        rp.UpdatedAt
+      FROM ReadingProgress rp
+      INNER JOIN Users u
+        ON u.UserId = rp.UserId
+      WHERE rp.BookId = ${bookId}
+      ORDER BY
+        CASE WHEN rp.Percentage IS NULL THEN 1 ELSE 0 END,
+        rp.Percentage DESC,
+        rp.UpdatedAt DESC
+    `
+
+    res.json({
+      book: bookResult.recordset[0],
+      readers: readersResult.recordset
+    })
+  } catch (err) {
+    console.error("GET /admin/books/:id/readers error:", err)
+    res.status(500).json({
+      message: "Failed to fetch book reader details",
+      error: err.message
+    })
+  }
+})
+
 app.put("/admin/books/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { title, author, description } = req.body
@@ -485,6 +533,103 @@ app.delete("/admin/books/:id", requireAuth, requireAdmin, async (req, res) => {
     console.error("DELETE /admin/books/:id error:", err)
     res.status(500).json({
       message: "Failed to delete book",
+      error: err.message
+    })
+  }
+})
+
+app.get("/admin/users", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await connectDB()
+
+    const usersResult = await sql.query`
+      SELECT
+        u.UserId,
+        u.Email,
+        u.Role,
+        COUNT(rp.Id) AS ProgressEntries,
+        COUNT(DISTINCT rp.BookId) AS StartedBooks,
+        SUM(CASE WHEN ISNULL(rp.Percentage, 0) >= 100 THEN 1 ELSE 0 END) AS CompletedBooks,
+        MAX(rp.UpdatedAt) AS LastActivityAt
+      FROM Users u
+      LEFT JOIN ReadingProgress rp
+        ON rp.UserId = u.UserId
+      GROUP BY
+        u.UserId,
+        u.Email,
+        u.Role
+      ORDER BY
+        CASE WHEN u.Role = 'admin' THEN 0 ELSE 1 END,
+        u.Email ASC
+    `
+
+    const statsResult = await sql.query`
+      SELECT
+        COUNT(*) AS TotalUsers,
+        SUM(CASE WHEN Role = 'admin' THEN 1 ELSE 0 END) AS TotalAdmins,
+        SUM(CASE WHEN Role = 'user' THEN 1 ELSE 0 END) AS TotalStandardUsers
+      FROM Users
+    `
+
+    res.json({
+      users: usersResult.recordset,
+      stats: statsResult.recordset[0]
+    })
+  } catch (err) {
+    console.error("GET /admin/users error:", err)
+    res.status(500).json({
+      message: "Failed to fetch users",
+      error: err.message
+    })
+  }
+})
+
+app.put("/admin/users/:id/role", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const userId = Number(req.params.id)
+    const { role } = req.body
+
+    if (!Number.isInteger(userId)) {
+      return res.status(400).json({ message: "Invalid user id" })
+    }
+
+    if (!["admin", "user"].includes(role)) {
+      return res.status(400).json({ message: "Role must be admin or user" })
+    }
+
+    if (req.user.userId === userId && role !== "admin") {
+      return res.status(400).json({
+        message: "You cannot remove your own admin access"
+      })
+    }
+
+    await connectDB()
+
+    const existing = await sql.query`
+      SELECT UserId, Email, Role
+      FROM Users
+      WHERE UserId = ${userId}
+    `
+
+    if (existing.recordset.length === 0) {
+      return res.status(404).json({ message: "User not found" })
+    }
+
+    await sql.query`
+      UPDATE Users
+      SET Role = ${role}
+      WHERE UserId = ${userId}
+    `
+
+    res.json({
+      message: `User role updated to ${role}`,
+      userId,
+      role
+    })
+  } catch (err) {
+    console.error("PUT /admin/users/:id/role error:", err)
+    res.status(500).json({
+      message: "Failed to update user role",
       error: err.message
     })
   }

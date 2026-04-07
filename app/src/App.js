@@ -8,16 +8,18 @@ import React, {
 import { Document, Page, pdfjs } from "react-pdf"
 import "react-pdf/dist/Page/AnnotationLayer.css"
 import "react-pdf/dist/Page/TextLayer.css"
-import EpubReader from "./EpubReader"
+import AdminPanel from "./AdminPanel"
 import AuthPanel from "./AuthPanel"
-import AdminUploadForm from "./AdminUploadForm"
 import BookCover from "./BookCover"
+import EpubReader from "./EpubReader"
 import {
-  deleteAdminBook,
-  getAdminBooks,
-  replaceAdminBookFile,
-  replaceAdminCover,
-  updateAdminBook
+  clearStoredAuth,
+  fetchLibraryBooks,
+  fetchProgress,
+  getStoredUser,
+  getToken,
+  saveProgress,
+  subscribeToUnauthorized
 } from "./api"
 import "./App.css"
 
@@ -48,44 +50,58 @@ function App() {
   const [booksError, setBooksError] = useState("")
   const [loadingBooks, setLoadingBooks] = useState(false)
   const [currentPageView, setCurrentPageView] = useState("library")
-
-  const [currentUser, setCurrentUser] = useState(() => {
-    const stored = localStorage.getItem("user")
-    return stored ? JSON.parse(stored) : null
-  })
-
+  const [currentUser, setCurrentUser] = useState(() => getStoredUser())
   const [currentPage, setCurrentPage] = useState(1)
   const [numPages, setNumPages] = useState(0)
   const [savedProgress, setSavedProgress] = useState(null)
   const [pdfReady, setPdfReady] = useState(false)
   const [pdfPageInput, setPdfPageInput] = useState("1")
   const [isReaderFullscreen, setIsReaderFullscreen] = useState(false)
-
   const [readingProgress, setReadingProgress] = useState({
     format: "",
     progressValue: "",
     percentage: 0
   })
-
   const [searchTerm, setSearchTerm] = useState("")
   const [formatFilter, setFormatFilter] = useState("all")
   const [sortBy, setSortBy] = useState("recent")
 
-  const [adminBooks, setAdminBooks] = useState([])
-  const [adminStats, setAdminStats] = useState(null)
-  const [adminLoading, setAdminLoading] = useState(false)
-  const [adminError, setAdminError] = useState("")
-  const [adminSearch, setAdminSearch] = useState("")
-  const [adminFormatFilter, setAdminFormatFilter] = useState("all")
-  const [adminSortBy, setAdminSortBy] = useState("newest")
-  const [editingBook, setEditingBook] = useState(null)
-  const [editTitle, setEditTitle] = useState("")
-  const [editAuthor, setEditAuthor] = useState("")
-  const [editDescription, setEditDescription] = useState("")
-  const [adminActionLoading, setAdminActionLoading] = useState(false)
-
-  const token = localStorage.getItem("token")
+  const token = getToken()
   const readerShellRef = useRef(null)
+
+  const resetReaderState = useCallback(() => {
+    setSelectedBook(null)
+    setSavedProgress(null)
+    setPdfReady(false)
+    setCurrentPage(1)
+    setNumPages(0)
+    setPdfPageInput("1")
+    setReadingProgress({
+      format: "",
+      progressValue: "",
+      percentage: 0
+    })
+    setIsReaderFullscreen(false)
+  }, [])
+
+  const logout = useCallback(() => {
+    clearStoredAuth()
+    setCurrentUser(null)
+    setBooks([])
+    setBooksError("")
+    setCurrentPageView("library")
+    resetReaderState()
+
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {})
+    }
+  }, [resetReaderState])
+
+  useEffect(() => {
+    return subscribeToUnauthorized(() => {
+      logout()
+    })
+  }, [logout])
 
   const fetchBooks = useCallback(async () => {
     if (!token) return
@@ -94,19 +110,7 @@ function App() {
       setLoadingBooks(true)
       setBooksError("")
 
-      const response = await fetch(`${API_BASE}/books/library`, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        setBooks([])
-        setBooksError(data.message || "Failed to fetch library.")
-        return
-      }
+      const data = await fetchLibraryBooks()
 
       if (Array.isArray(data)) {
         setBooks(data)
@@ -116,41 +120,22 @@ function App() {
       }
     } catch (error) {
       console.error("Failed to fetch library:", error)
+
+      if (error.message === "Your session has expired. Please log in again.") {
+        return
+      }
+
       setBooks([])
-      setBooksError("Failed to fetch books from backend.")
+      setBooksError(error.message || "Failed to fetch books from backend.")
     } finally {
       setLoadingBooks(false)
     }
   }, [token])
 
-  const fetchAdminBooks = useCallback(async () => {
-    if (!token || currentUser?.role !== "admin") return
-
-    try {
-      setAdminLoading(true)
-      setAdminError("")
-
-      const data = await getAdminBooks()
-      setAdminBooks(data.books || [])
-      setAdminStats(data.stats || null)
-    } catch (error) {
-      console.error("Failed to fetch admin books:", error)
-      setAdminError(error.message || "Failed to load admin panel")
-    } finally {
-      setAdminLoading(false)
-    }
-  }, [token, currentUser])
-
   useEffect(() => {
     if (!currentUser || !token) return
     fetchBooks()
   }, [currentUser, token, fetchBooks])
-
-  useEffect(() => {
-    if (currentPageView === "admin" && currentUser?.role === "admin") {
-      fetchAdminBooks()
-    }
-  }, [currentPageView, currentUser, fetchAdminBooks])
 
   useEffect(() => {
     if (!selectedBook || !currentUser || !token) return
@@ -168,16 +153,7 @@ function App() {
 
     const loadProgress = async () => {
       try {
-        const response = await fetch(
-          `${API_BASE}/books/${selectedBook.BookId}/progress`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`
-            }
-          }
-        )
-
-        const data = await response.json()
+        const data = await fetchProgress(selectedBook.BookId)
         setSavedProgress(data)
       } catch (error) {
         console.error("Failed to load progress:", error)
@@ -198,7 +174,7 @@ function App() {
     if (savedFormat !== "pdf") return
 
     const page = parseInt(savedValue, 10)
-    if (!isNaN(page) && page > 0) {
+    if (!Number.isNaN(page) && page > 0) {
       setCurrentPage(page)
       setPdfPageInput(String(page))
     }
@@ -213,14 +189,7 @@ function App() {
 
     const timeout = setTimeout(async () => {
       try {
-        await fetch(`${API_BASE}/books/${selectedBook.BookId}/progress`, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`
-          },
-          body: JSON.stringify(readingProgress)
-        })
+        await saveProgress(selectedBook.BookId, readingProgress)
       } catch (error) {
         console.error("Failed to save PDF progress:", error)
       }
@@ -229,20 +198,21 @@ function App() {
     return () => clearTimeout(timeout)
   }, [readingProgress, selectedBook, pdfReady, token])
 
-
-
   useEffect(() => {
     const onFullscreenChange = () => {
       setIsReaderFullscreen(!!document.fullscreenElement)
     }
 
     document.addEventListener("fullscreenchange", onFullscreenChange)
-    return () =>
+
+    return () => {
       document.removeEventListener("fullscreenchange", onFullscreenChange)
+    }
   }, [])
 
   const pdfFileUrl = useMemo(() => {
     if (!selectedBook || selectedBook.FileType !== "pdf") return null
+
     return `${API_BASE}/books/${selectedBook.BookId}/read`
   }, [selectedBook])
 
@@ -257,8 +227,8 @@ function App() {
     }
   }, [pdfFileUrl, token])
 
-  const onDocumentLoadSuccess = ({ numPages }) => {
-    setNumPages(numPages)
+  const onDocumentLoadSuccess = ({ numPages: loadedPageCount }) => {
+    setNumPages(loadedPageCount)
     setPdfReady(true)
 
     setReadingProgress((prev) => {
@@ -269,7 +239,7 @@ function App() {
       return {
         format: "pdf",
         progressValue: String(currentPage),
-        percentage: numPages ? (currentPage / numPages) * 100 : 0
+        percentage: loadedPageCount ? (currentPage / loadedPageCount) * 100 : 0
       }
     })
   }
@@ -307,38 +277,40 @@ function App() {
     goToPage(currentPage - 1)
   }, [pdfReady, currentPage, goToPage])
 
-    useEffect(() => {
-  if (!selectedBook) return
+  useEffect(() => {
+    if (!selectedBook) return
 
-  const onKeyDown = (e) => {
-    if (selectedBook.FileType === "pdf") {
-      if (e.key === "ArrowRight") {
-        e.preventDefault()
-        goToNextPage()
+    const onKeyDown = (e) => {
+      if (selectedBook.FileType === "pdf") {
+        if (e.key === "ArrowRight") {
+          e.preventDefault()
+          goToNextPage()
+        }
+
+        if (e.key === "ArrowLeft") {
+          e.preventDefault()
+          goToPreviousPage()
+        }
       }
 
-      if (e.key === "ArrowLeft") {
-        e.preventDefault()
-        goToPreviousPage()
+      if (e.key === "Escape") {
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {})
+        }
+
+        setIsReaderFullscreen(false)
       }
     }
 
-    if (e.key === "Escape") {
-      if (document.fullscreenElement) {
-        document.exitFullscreen().catch(() => {})
-      }
-      setIsReaderFullscreen(false)
-    }
-  }
-
-  window.addEventListener("keydown", onKeyDown)
-  return () => window.removeEventListener("keydown", onKeyDown)
-}, [selectedBook, goToNextPage, goToPreviousPage])
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [selectedBook, goToNextPage, goToPreviousPage])
 
   const handlePdfJumpSubmit = (e) => {
     e.preventDefault()
     const page = parseInt(pdfPageInput, 10)
-    if (!isNaN(page)) {
+
+    if (!Number.isNaN(page)) {
       goToPage(page)
     }
   }
@@ -363,143 +335,24 @@ function App() {
   }
 
   const closeBook = () => {
-    setSelectedBook(null)
-    setSavedProgress(null)
-    setPdfReady(false)
-    setCurrentPage(1)
-    setNumPages(0)
-    setPdfPageInput("1")
-    setReadingProgress({
-      format: "",
-      progressValue: "",
-      percentage: 0
-    })
+    resetReaderState()
     setCurrentPageView("library")
 
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {})
     }
-
-    setIsReaderFullscreen(false)
   }
 
   const handleAuthSuccess = (user) => {
     setCurrentUser(user)
-    setSelectedBook(null)
     setBooks([])
     setBooksError("")
     setCurrentPageView("library")
-  }
-
-  const logout = () => {
-    localStorage.removeItem("token")
-    localStorage.removeItem("user")
-    setCurrentUser(null)
-    setBooks([])
-    setAdminBooks([])
-    setAdminStats(null)
-    setSelectedBook(null)
-    setBooksError("")
-    setAdminError("")
-    setSavedProgress(null)
-    setPdfReady(false)
-    setCurrentPage(1)
-    setNumPages(0)
-    setPdfPageInput("1")
-    setReadingProgress({
-      format: "",
-      progressValue: "",
-      percentage: 0
-    })
-    setCurrentPageView("library")
-  }
-
-  const openEditBook = (book) => {
-    setEditingBook(book)
-    setEditTitle(book.Title || "")
-    setEditAuthor(book.Author || "")
-    setEditDescription(book.Description || "")
-  }
-
-  const closeEditBook = () => {
-    setEditingBook(null)
-    setEditTitle("")
-    setEditAuthor("")
-    setEditDescription("")
-  }
-
-  const submitEditBook = async (e) => {
-    e.preventDefault()
-    if (!editingBook) return
-
-    try {
-      setAdminActionLoading(true)
-
-      await updateAdminBook(editingBook.BookId, {
-        title: editTitle,
-        author: editAuthor,
-        description: editDescription
-      })
-
-      await fetchAdminBooks()
-      await fetchBooks()
-      closeEditBook()
-    } catch (error) {
-      alert(error.message || "Failed to update book")
-    } finally {
-      setAdminActionLoading(false)
-    }
-  }
-
-  const handleDeleteBook = async (book) => {
-    const confirmed = window.confirm(`Delete "${book.Title}"?`)
-    if (!confirmed) return
-
-    try {
-      setAdminActionLoading(true)
-      await deleteAdminBook(book.BookId)
-      await fetchAdminBooks()
-      await fetchBooks()
-    } catch (error) {
-      alert(error.message || "Failed to delete book")
-    } finally {
-      setAdminActionLoading(false)
-    }
-  }
-
-  const handleReplaceCover = async (book, file) => {
-    if (!file) return
-
-    try {
-      setAdminActionLoading(true)
-      await replaceAdminCover(book.BookId, file)
-      await fetchAdminBooks()
-      await fetchBooks()
-    } catch (error) {
-      alert(error.message || "Failed to replace cover")
-    } finally {
-      setAdminActionLoading(false)
-    }
-  }
-
-  const handleReplaceBookFile = async (book, file) => {
-    if (!file) return
-
-    try {
-      setAdminActionLoading(true)
-      await replaceAdminBookFile(book.BookId, file)
-      await fetchAdminBooks()
-      await fetchBooks()
-    } catch (error) {
-      alert(error.message || "Failed to replace file")
-    } finally {
-      setAdminActionLoading(false)
-    }
+    resetReaderState()
   }
 
   const filteredBooks = useMemo(() => {
     let result = [...books]
-
     const query = searchTerm.trim().toLowerCase()
 
     if (query) {
@@ -550,53 +403,13 @@ function App() {
     return result
   }, [books, searchTerm, formatFilter, sortBy])
 
-  const filteredAdminBooks = useMemo(() => {
-    let result = [...adminBooks]
-
-    const query = adminSearch.trim().toLowerCase()
-
-    if (query) {
-      result = result.filter((book) => {
-        const haystack = [
-          book.Title,
-          book.Author,
-          book.Description,
-          book.FileType
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase()
-
-        return haystack.includes(query)
-      })
-    }
-
-    if (adminFormatFilter !== "all") {
-      result = result.filter(
-        (book) => (book.FileType || "").toLowerCase() === adminFormatFilter
-      )
-    }
-
-    if (adminSortBy === "title") {
-      result.sort((a, b) => (a.Title || "").localeCompare(b.Title || ""))
-    } else if (adminSortBy === "author") {
-      result.sort((a, b) => (a.Author || "").localeCompare(b.Author || ""))
-    } else {
-      result.sort(
-        (a, b) =>
-          new Date(b.CreatedAt || 0).getTime() - new Date(a.CreatedAt || 0).getTime()
-      )
-    }
-
-    return result
-  }, [adminBooks, adminSearch, adminFormatFilter, adminSortBy])
-
   const lastOpenedBook = useMemo(() => {
     const withProgress = books
-      .filter((b) => b.progress?.UpdatedAt)
+      .filter((book) => book.progress?.UpdatedAt)
       .sort(
         (a, b) =>
-          new Date(b.progress.UpdatedAt) - new Date(a.progress.UpdatedAt)
+          new Date(b.progress.UpdatedAt).getTime() -
+          new Date(a.progress.UpdatedAt).getTime()
       )
 
     return withProgress[0] || null
@@ -617,7 +430,7 @@ function App() {
     return (
       <div className="app-shell auth-shell">
         <div className="brand-header">
-          <div className="brand-badge">📚</div>
+          <div className="brand-badge">Book</div>
           <div>
             <h1 className="brand-title">OnlineReader</h1>
             <p className="brand-subtitle">
@@ -644,6 +457,7 @@ function App() {
             <button
               className={`secondary-btn ${currentPageView === "library" ? "active-tab" : ""}`}
               onClick={() => setCurrentPageView("library")}
+              type="button"
             >
               Library
             </button>
@@ -652,6 +466,7 @@ function App() {
               <button
                 className={`secondary-btn ${currentPageView === "admin" ? "active-tab" : ""}`}
                 onClick={() => setCurrentPageView("admin")}
+                type="button"
               >
                 Admin Panel
               </button>
@@ -661,7 +476,7 @@ function App() {
           <div className="user-card">
             <div className="user-card-email">{currentUser.email}</div>
             <div className="user-card-role">{currentUser.role}</div>
-            <button className="secondary-btn" onClick={logout}>
+            <button className="secondary-btn" onClick={logout} type="button">
               Logout
             </button>
           </div>
@@ -669,209 +484,7 @@ function App() {
       </div>
 
       {currentPageView === "admin" && currentUser.role === "admin" && (
-        <div className="admin-overhaul">
-          <div className="admin-stats-grid">
-            <div className="stat-card">
-              <div className="stat-label">Total books</div>
-              <div className="stat-value">{adminStats?.TotalBooks || 0}</div>
-            </div>
-
-            <div className="stat-card">
-              <div className="stat-label">Total users</div>
-              <div className="stat-value">{adminStats?.TotalUsers || 0}</div>
-            </div>
-
-            <div className="stat-card">
-              <div className="stat-label">Progress entries</div>
-              <div className="stat-value">{adminStats?.TotalProgressEntries || 0}</div>
-            </div>
-          </div>
-
-          <div className="admin-card">
-            <h2 className="section-title">Upload New Book</h2>
-            <AdminUploadForm
-              onUploadSuccess={async () => {
-                await fetchBooks()
-                await fetchAdminBooks()
-              }}
-            />
-          </div>
-
-          <div className="admin-card">
-            <div className="section-header">
-              <h2 className="section-title">Manage Books</h2>
-            </div>
-
-            <div className="library-toolbar admin-toolbar">
-              <input
-                className="input toolbar-input"
-                type="text"
-                placeholder="Search books..."
-                value={adminSearch}
-                onChange={(e) => setAdminSearch(e.target.value)}
-              />
-
-              <select
-                className="input toolbar-select"
-                value={adminFormatFilter}
-                onChange={(e) => setAdminFormatFilter(e.target.value)}
-              >
-                <option value="all">All formats</option>
-                <option value="pdf">PDF</option>
-                <option value="epub">EPUB</option>
-              </select>
-
-              <select
-                className="input toolbar-select"
-                value={adminSortBy}
-                onChange={(e) => setAdminSortBy(e.target.value)}
-              >
-                <option value="newest">Newest</option>
-                <option value="title">Title A–Z</option>
-                <option value="author">Author A–Z</option>
-              </select>
-            </div>
-
-            {adminError && <p className="error-text">{adminError}</p>}
-
-            {adminLoading ? (
-              <p className="message-text">Loading admin data...</p>
-            ) : (
-              <div className="admin-table-wrap">
-                <table className="admin-table">
-                  <thead>
-                    <tr>
-                      <th>Cover</th>
-                      <th>Title</th>
-                      <th>Author</th>
-                      <th>Format</th>
-                      <th>Readers</th>
-                      <th>Created</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredAdminBooks.map((book) => (
-                      <tr key={book.BookId}>
-                        <td className="admin-cover-cell">
-                          <div className="admin-cover-mini">
-                            <BookCover book={book} />
-                          </div>
-                        </td>
-                        <td>{book.Title}</td>
-                        <td>{book.Author || "Unknown"}</td>
-                        <td>{book.FileType}</td>
-                        <td>{book.ActiveReaders || 0}</td>
-                        <td>{formatDate(book.CreatedAt)}</td>
-                        <td>
-                          <div className="admin-actions">
-                            <button
-                              className="secondary-btn"
-                              onClick={() => openEditBook(book)}
-                            >
-                              Edit
-                            </button>
-
-                            <label className="secondary-btn admin-file-label">
-                              Replace Cover
-                              <input
-                                type="file"
-                                accept=".jpg,.jpeg,.png,.webp,image/*"
-                                hidden
-                                onChange={(e) =>
-                                  handleReplaceCover(book, e.target.files?.[0] || null)
-                                }
-                              />
-                            </label>
-
-                            <label className="secondary-btn admin-file-label">
-                              Replace File
-                              <input
-                                type="file"
-                                accept=".pdf,.epub"
-                                hidden
-                                onChange={(e) =>
-                                  handleReplaceBookFile(book, e.target.files?.[0] || null)
-                                }
-                              />
-                            </label>
-
-                            <button
-                              className="danger-btn"
-                              onClick={() => handleDeleteBook(book)}
-                              disabled={adminActionLoading}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-
-                    {filteredAdminBooks.length === 0 && (
-                      <tr>
-                        <td colSpan="7" className="admin-empty-cell">
-                          No books found.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {editingBook && (
-            <div className="modal-overlay" onClick={closeEditBook}>
-              <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-                <h3 className="section-title">Edit Book</h3>
-
-                <form className="admin-form" onSubmit={submitEditBook}>
-                  <input
-                    className="input"
-                    type="text"
-                    value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
-                    placeholder="Title"
-                  />
-
-                  <input
-                    className="input"
-                    type="text"
-                    value={editAuthor}
-                    onChange={(e) => setEditAuthor(e.target.value)}
-                    placeholder="Author"
-                  />
-
-                  <textarea
-                    className="textarea"
-                    value={editDescription}
-                    onChange={(e) => setEditDescription(e.target.value)}
-                    placeholder="Description"
-                  />
-
-                  <div className="modal-actions">
-                    <button
-                      type="button"
-                      className="secondary-btn"
-                      onClick={closeEditBook}
-                    >
-                      Cancel
-                    </button>
-
-                    <button
-                      type="submit"
-                      className="primary-btn"
-                      disabled={adminActionLoading}
-                    >
-                      {adminActionLoading ? "Saving..." : "Save Changes"}
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          )}
-        </div>
+        <AdminPanel currentUser={currentUser} onLibraryRefresh={fetchBooks} />
       )}
 
       {currentPageView === "library" && !selectedBook && (
@@ -918,8 +531,8 @@ function App() {
               onChange={(e) => setSortBy(e.target.value)}
             >
               <option value="recent">Recently active</option>
-              <option value="title">Title A–Z</option>
-              <option value="author">Author A–Z</option>
+              <option value="title">Title A-Z</option>
+              <option value="author">Author A-Z</option>
               <option value="progress">Highest progress</option>
             </select>
           </div>
@@ -939,7 +552,8 @@ function App() {
                   <div className="continue-body">
                     <div className="continue-title">{lastOpenedBook.Title}</div>
                     <div className="continue-meta">
-                      {lastOpenedBook.Author || "Unknown"} • {(lastOpenedBook.FileType || "").toUpperCase()}
+                      {lastOpenedBook.Author || "Unknown"} |{" "}
+                      {(lastOpenedBook.FileType || "").toUpperCase()}
                     </div>
 
                     <div className="mini-progress-row">
@@ -960,7 +574,7 @@ function App() {
                       Last opened: {formatDate(lastOpenedBook.progress?.UpdatedAt) || "Recently"}
                     </div>
 
-                    <button className="primary-btn" onClick={() => openBook(lastOpenedBook)}>
+                    <button className="primary-btn" onClick={() => openBook(lastOpenedBook)} type="button">
                       Resume Reading
                     </button>
                   </div>
@@ -1043,7 +657,7 @@ function App() {
                         </div>
                       </div>
 
-                      <button className="primary-btn" onClick={() => openBook(book)}>
+                      <button className="primary-btn" onClick={() => openBook(book)} type="button">
                         {hasProgress && !isCompleted ? "Resume Reading" : "Read Book"}
                       </button>
                     </div>
@@ -1062,20 +676,20 @@ function App() {
         >
           <div className="reader-header reader-toolbar">
             <div className="reader-toolbar-left">
-              <button className="secondary-btn" onClick={closeBook}>
-                ← Back to Library
+              <button className="secondary-btn" onClick={closeBook} type="button">
+                Back to Library
               </button>
 
               <div>
                 <h2 className="reader-title">{selectedBook.Title}</h2>
                 <p className="reader-meta">
-                  {selectedBook.Author || "Unknown"} • {selectedBook.FileType}
+                  {selectedBook.Author || "Unknown"} | {selectedBook.FileType}
                 </p>
               </div>
             </div>
 
             <div className="reader-toolbar-right">
-              <button className="secondary-btn" onClick={toggleFullscreen}>
+              <button className="secondary-btn" onClick={toggleFullscreen} type="button">
                 {isReaderFullscreen ? "Exit Fullscreen" : "Fullscreen"}
               </button>
             </div>
@@ -1088,6 +702,7 @@ function App() {
                   className="secondary-btn"
                   onClick={goToPreviousPage}
                   disabled={!pdfReady || currentPage <= 1}
+                  type="button"
                 >
                   Previous
                 </button>
@@ -1112,6 +727,7 @@ function App() {
                   className="secondary-btn"
                   onClick={goToNextPage}
                   disabled={!pdfReady || currentPage >= numPages}
+                  type="button"
                 >
                   Next
                 </button>
@@ -1158,7 +774,6 @@ function App() {
                 bookId={selectedBook.BookId}
                 bookTitle={selectedBook.Title}
                 bookAuthor={selectedBook.Author}
-                bookUrl={`${API_BASE}/books/${selectedBook.BookId}/read`}
                 isFullscreen={isReaderFullscreen}
                 onToggleFullscreen={toggleFullscreen}
               />

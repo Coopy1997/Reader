@@ -1,10 +1,13 @@
 import React, { useEffect, useRef, useState } from "react"
 import ePub from "epubjs"
-import { fetchProgress, saveProgress } from "./api"
+import {
+  fetchProgress,
+  fetchProtectedBookBuffer,
+  saveProgress
+} from "./api"
 
 export default function EpubReader({
   bookId,
-  bookUrl,
   bookTitle,
   bookAuthor,
   isFullscreen,
@@ -27,15 +30,7 @@ export default function EpubReader({
     async function initReader() {
       try {
         setLoading(true)
-
-        const token = localStorage.getItem("token")
-        const response = await fetch(bookUrl, {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        })
-
-        const arrayBuffer = await response.arrayBuffer()
+        const arrayBuffer = await fetchProtectedBookBuffer(bookId)
 
         const book = ePub(arrayBuffer)
         bookRef.current = book
@@ -111,7 +106,7 @@ export default function EpubReader({
         bookRef.current = null
       }
     }
-  }, [bookId, bookUrl])
+  }, [bookId])
 
   useEffect(() => {
     const onKeyDown = (e) => {

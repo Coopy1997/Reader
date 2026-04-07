@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react"
 import JSZip from "jszip"
-
-const API_BASE =
-  process.env.REACT_APP_API_BASE_URL || "http://localhost:5000"
+import {
+  fetchProtectedBookBuffer,
+  fetchProtectedCoverBlob
+} from "./api"
 
 function CoverFallback({ book }) {
   return (
@@ -31,24 +32,9 @@ export default function BookCover({ book }) {
         setLoading(true)
         setCoverUrl(null)
 
-        const token = localStorage.getItem("token")
-
         // 1) custom uploaded cover
         if (book.CoverImagePath) {
-          const res = await fetch(
-            `${API_BASE}/books/${book.BookId}/cover`,
-            {
-              headers: {
-                Authorization: `Bearer ${token}`
-              }
-            }
-          )
-
-          if (!res.ok) {
-            throw new Error("Failed to fetch custom cover")
-          }
-
-          const blob = await res.blob()
+          const blob = await fetchProtectedCoverBlob(book.BookId)
           objectUrlToRevoke = URL.createObjectURL(blob)
 
           if (!cancelled) {
@@ -68,21 +54,8 @@ export default function BookCover({ book }) {
 
         // 3) EPUB extracted cover
         if (book.FileType === "epub") {
-          const res = await fetch(
-            `${API_BASE}/books/${book.BookId}/read`,
-            {
-              headers: {
-                Authorization: `Bearer ${token}`
-              }
-            }
-          )
-
-          if (!res.ok) {
-            throw new Error("Failed to fetch EPUB")
-          }
-
-          const blob = await res.blob()
-          const zip = await JSZip.loadAsync(blob)
+          const arrayBuffer = await fetchProtectedBookBuffer(book.BookId)
+          const zip = await JSZip.loadAsync(arrayBuffer)
           const parser = new DOMParser()
 
           const containerXml = await zip

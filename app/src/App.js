@@ -13,20 +13,69 @@ import AuthPanel from "./AuthPanel"
 import BookCover from "./BookCover"
 import EpubReader from "./EpubReader"
 import {
+  addBookToMyList,
   clearStoredAuth,
+  deleteAdminReview,
   fetchLibraryBooks,
   fetchProgress,
+  followUser,
+  getApiBase,
+  getBookReviews,
+  getCommunityFeed,
+  getLeaderboard,
+  getMyList,
+  getMyProfile,
+  getProfile,
   getStoredUser,
   getToken,
+  removeBookFromMyList,
+  saveBookReview,
   saveProgress,
-  subscribeToUnauthorized
+  subscribeToUnauthorized,
+  toggleHelpfulVote,
+  unfollowUser,
+  updateAdminReview,
+  updateMyGoals,
+  updateMyProfile,
+  uploadMyAvatar
 } from "./api"
 import "./App.css"
 
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
 
 const API_BASE =
-  process.env.REACT_APP_API_BASE_URL || "http://localhost:5000"
+  getApiBase()
+
+const BADGE_ICON_MAP = {
+  book: "📘",
+  medal: "🏅",
+  chat: "💬",
+  bookmark: "🔖",
+  flame: "🔥",
+  crown: "👑",
+  people: "👥",
+  spark: "✨",
+  staff: "🛡️",
+  rocket: "🚀",
+  dragon: "🐉",
+  legend: "🌟",
+  gem: "💎",
+  lightning: "⚡",
+  trophy: "🏆"
+}
+
+const TITLE_ICON_MAP = {
+  "staff-sentinel": "🛡️",
+  "gold-crown": "👑",
+  "silver-crown": "🥈",
+  "bronze-crown": "🥉",
+  "rising-reader": "✨",
+  "avid-reader": "📘",
+  storykeeper: "🔖",
+  "grand-curator": "💎",
+  "master-librarian": "🌟",
+  "mythic-archivist": "🐉"
+}
 
 function formatPercent(value) {
   if (value == null || Number.isNaN(Number(value))) return 0
@@ -70,6 +119,130 @@ function getReadingStatus(book) {
   return "Ready to start"
 }
 
+function formatActivityMessage(activity) {
+  const name = activity.DisplayName || activity.Email || "A reader"
+  const bookTitle = activity.BookTitle || "a book"
+
+  if (activity.ActivityType === "saved_to_list") {
+    return `${name} added ${bookTitle} to My List`
+  }
+
+  if (activity.ActivityType === "reviewed_book") {
+    const rating = activity.metadata?.rating
+    return rating
+      ? `${name} rated ${bookTitle} ${rating}/5`
+      : `${name} reviewed ${bookTitle}`
+  }
+
+  if (activity.ActivityType === "completed_book") {
+    return `${name} finished ${bookTitle}`
+  }
+
+  if (activity.ActivityType === "started_book") {
+    return `${name} started ${bookTitle}`
+  }
+
+  if (activity.ActivityType === "followed_reader") {
+    return `${name} followed another reader`
+  }
+
+  return `${name} had new reading activity`
+}
+
+function getBadgeIcon(icon) {
+  return BADGE_ICON_MAP[icon] || "★"
+}
+
+function getProfileAvatarSrc(profile) {
+  if (!profile) return ""
+  if (profile.AvatarImagePath && profile.UserId) {
+    return `${API_BASE}/profiles/${profile.UserId}/avatar`
+  }
+
+  return profile.AvatarUrl || ""
+}
+
+function getProfileAvatarSrcWithCache(profile) {
+  const baseSrc = getProfileAvatarSrc(profile)
+
+  if (!baseSrc) return ""
+
+  if (profile?.AvatarImagePath && profile?.UserId) {
+    const cacheToken = encodeURIComponent(
+      profile.ProfileUpdatedAt || profile.AvatarImagePath || "avatar"
+    )
+    return `${API_BASE}/profiles/${profile.UserId}/avatar?v=${cacheToken}`
+  }
+
+  return baseSrc
+}
+
+function getUserDisplayName(profile, fallbackEmail = "") {
+  return profile?.DisplayName || fallbackEmail || "Reader"
+}
+
+function formatAverageRating(value) {
+  const rating = Number(value || 0)
+
+  if (!Number.isFinite(rating) || rating <= 0) {
+    return "No ratings yet"
+  }
+
+  return Number.isInteger(rating) ? `${rating}/5` : `${rating.toFixed(1)}/5`
+}
+
+function getLevelToneClass(level) {
+  const numericLevel = Number(level || 0)
+
+  if (numericLevel >= 100) return "level-tone-100"
+  if (numericLevel >= 50) return "level-tone-50"
+  if (numericLevel >= 25) return "level-tone-25"
+  if (numericLevel >= 10) return "level-tone-10"
+  return ""
+}
+
+function getPrestigeTitle(level) {
+  const numericLevel = Number(level || 0)
+
+  if (numericLevel >= 100) return "Mythic Archivist"
+  if (numericLevel >= 50) return "Master Librarian"
+  if (numericLevel >= 25) return "Grand Curator"
+  if (numericLevel >= 10) return "Storykeeper"
+  if (numericLevel >= 5) return "Avid Reader"
+  return "Rising Reader"
+}
+
+function getPodiumIcon(rank) {
+  if (rank === 1) return "👑"
+  if (rank === 2) return "🥈"
+  if (rank === 3) return "🥉"
+  return ""
+}
+
+function getTitleToneClass(titleCode) {
+  if (!titleCode) return ""
+  if (titleCode === "staff-sentinel") return "title-tone-staff"
+  if (titleCode === "gold-crown") return "title-tone-gold"
+  if (titleCode === "silver-crown") return "title-tone-silver"
+  if (titleCode === "bronze-crown") return "title-tone-bronze"
+  if (titleCode === "mythic-archivist") return "title-tone-mythic"
+  if (titleCode === "master-librarian") return "title-tone-master"
+  if (titleCode === "grand-curator") return "title-tone-grand"
+  return "title-tone-soft"
+}
+
+function getTitleIcon(title) {
+  if (!title?.code) return ""
+  return TITLE_ICON_MAP[title.code] || "✦"
+}
+
+function renderDisplayName(name, role, leaderboardRank) {
+  const isAdmin = (role || "").toLowerCase() === "admin"
+  const podiumIcon = getPodiumIcon(leaderboardRank)
+
+  return `${isAdmin ? "🛡️ " : ""}${podiumIcon ? `${podiumIcon} ` : ""}${name}`
+}
+
 function App() {
   const [books, setBooks] = useState([])
   const [selectedBook, setSelectedBook] = useState(null)
@@ -94,6 +267,37 @@ function App() {
   const [sortBy, setSortBy] = useState("recent")
   const [readerReturnPage, setReaderReturnPage] = useState("library")
   const [readerSettingsOpen, setReaderSettingsOpen] = useState(false)
+  const [profileUserId, setProfileUserId] = useState(null)
+  const [profileData, setProfileData] = useState(null)
+  const [profileLoading, setProfileLoading] = useState(false)
+  const [profileForm, setProfileForm] = useState({
+    displayName: "",
+    bio: "",
+    avatarUrl: "",
+    favoriteGenres: "",
+    favoriteBook: "",
+    selectedTitle: ""
+  })
+  const [goalForm, setGoalForm] = useState({
+    weeklyReadingDaysGoal: 4,
+    monthlyBooksGoal: 2
+  })
+  const [avatarUploadFile, setAvatarUploadFile] = useState(null)
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false)
+  const [myListBooks, setMyListBooks] = useState([])
+  const [communityFeed, setCommunityFeed] = useState([])
+  const [leaderboard, setLeaderboard] = useState([])
+  const [communityLoading, setCommunityLoading] = useState(false)
+  const [detailReviews, setDetailReviews] = useState([])
+  const [reviewSummary, setReviewSummary] = useState({
+    reviewCount: 0,
+    averageRating: 0
+  })
+  const [reviewDraft, setReviewDraft] = useState({
+    rating: 5,
+    comment: ""
+  })
+  const [reviewLoading, setReviewLoading] = useState(false)
   const [readerSettings, setReaderSettings] = useState({
     pdfScale: 1,
     pdfTheme: "dark",
@@ -176,6 +380,103 @@ function App() {
     if (!currentUser || !token) return
     fetchBooks()
   }, [currentUser, token, fetchBooks])
+
+  const loadMyList = useCallback(async () => {
+    if (!currentUser || !token) return
+
+    try {
+      const data = await getMyList()
+      setMyListBooks(Array.isArray(data) ? data : [])
+    } catch (error) {
+      console.error("Failed to load My List:", error)
+    }
+  }, [currentUser, token])
+
+  useEffect(() => {
+    loadMyList()
+  }, [loadMyList])
+
+  useEffect(() => {
+    if (currentPageView !== "profile" || !currentUser || !token) return
+
+    const targetUserId = profileUserId || currentUser.userId
+
+    const loadProfile = async () => {
+      try {
+        setProfileLoading(true)
+        const data =
+          targetUserId === currentUser.userId
+            ? await getMyProfile()
+            : await getProfile(targetUserId)
+
+        setProfileData(data)
+        setProfileForm({
+          displayName: data.profile?.DisplayName || "",
+          bio: data.profile?.Bio || "",
+          avatarUrl: data.profile?.AvatarUrl || "",
+          favoriteGenres: data.profile?.FavoriteGenres || "",
+          favoriteBook: data.profile?.FavoriteBook || "",
+          selectedTitle: data.profile?.SelectedTitle || data.activeTitle?.code || ""
+        })
+        setGoalForm({
+          weeklyReadingDaysGoal: data.profile?.WeeklyReadingDaysGoal || 4,
+          monthlyBooksGoal: data.profile?.MonthlyBooksGoal || 2
+        })
+      } catch (error) {
+        console.error("Failed to load profile:", error)
+      } finally {
+        setProfileLoading(false)
+      }
+    }
+
+    loadProfile()
+  }, [currentPageView, profileUserId, currentUser, token])
+
+  useEffect(() => {
+    if (currentPageView !== "community" || !currentUser || !token) return
+
+    const loadCommunity = async () => {
+      try {
+        setCommunityLoading(true)
+        const [feedData, leaderboardData] = await Promise.all([
+          getCommunityFeed(),
+          getLeaderboard()
+        ])
+
+        setCommunityFeed(Array.isArray(feedData) ? feedData : [])
+        setLeaderboard(Array.isArray(leaderboardData) ? leaderboardData : [])
+      } catch (error) {
+        console.error("Failed to load community:", error)
+      } finally {
+        setCommunityLoading(false)
+      }
+    }
+
+    loadCommunity()
+  }, [currentPageView, currentUser, token])
+
+  useEffect(() => {
+    if (currentPageView !== "detail" || !detailBook || !currentUser || !token) return
+
+    const loadReviews = async () => {
+      try {
+        setReviewLoading(true)
+        const data = await getBookReviews(detailBook.BookId)
+        setDetailReviews(data.reviews || [])
+        setReviewSummary(data.summary || { reviewCount: 0, averageRating: 0 })
+        setReviewDraft({
+          rating: data.currentUserReview?.Rating || 5,
+          comment: data.currentUserReview?.Comment || ""
+        })
+      } catch (error) {
+        console.error("Failed to load reviews:", error)
+      } finally {
+        setReviewLoading(false)
+      }
+    }
+
+    loadReviews()
+  }, [currentPageView, detailBook, currentUser, token])
 
   useEffect(() => {
     if (!selectedBook || !currentUser || !token) return
@@ -392,6 +693,157 @@ function App() {
     setReaderReturnPage(sourcePage)
   }
 
+  const openProfilePage = useCallback(
+    (userId = currentUser?.userId) => {
+      setProfileUserId(userId || currentUser?.userId || null)
+      setDetailBook(null)
+      setCurrentPageView("profile")
+    },
+    [currentUser]
+  )
+
+  const handleToggleMyList = useCallback(
+    async (book) => {
+      const isSaved = myListBooks.some((item) => item.BookId === book.BookId)
+
+      try {
+        if (isSaved) {
+          await removeBookFromMyList(book.BookId)
+        } else {
+          await addBookToMyList(book.BookId)
+        }
+
+        await loadMyList()
+      } catch (error) {
+        console.error("Failed to update My List:", error)
+      }
+    },
+    [loadMyList, myListBooks]
+  )
+
+  const handleSaveReview = useCallback(async () => {
+    if (!detailBook) return
+
+    try {
+      await saveBookReview(detailBook.BookId, reviewDraft)
+      const data = await getBookReviews(detailBook.BookId)
+      setDetailReviews(data.reviews || [])
+      setReviewSummary(data.summary || { reviewCount: 0, averageRating: 0 })
+    } catch (error) {
+      console.error("Failed to save review:", error)
+    }
+  }, [detailBook, reviewDraft])
+
+  const handleHelpfulVote = useCallback(
+    async (reviewId) => {
+      if (!detailBook) return
+
+      try {
+        await toggleHelpfulVote(reviewId)
+        const data = await getBookReviews(detailBook.BookId)
+        setDetailReviews(data.reviews || [])
+        setReviewSummary(data.summary || { reviewCount: 0, averageRating: 0 })
+      } catch (error) {
+        console.error("Failed to update helpful vote:", error)
+      }
+    },
+    [detailBook]
+  )
+
+  const handleSaveProfile = useCallback(async () => {
+    try {
+      await updateMyProfile(profileForm)
+      const data = await getMyProfile()
+      setProfileData(data)
+    } catch (error) {
+      console.error("Failed to save profile:", error)
+    }
+  }, [profileForm])
+
+  const handleSaveGoals = useCallback(async () => {
+    try {
+      await updateMyGoals(goalForm)
+      const data = await getMyProfile()
+      setProfileData(data)
+    } catch (error) {
+      console.error("Failed to save goals:", error)
+    }
+  }, [goalForm])
+
+  const handleUploadAvatar = useCallback(async () => {
+    if (!avatarUploadFile) return
+
+    try {
+      await uploadMyAvatar(avatarUploadFile)
+      const data = await getMyProfile()
+      setProfileData(data)
+      setAvatarUploadFile(null)
+    } catch (error) {
+      console.error("Failed to upload avatar:", error)
+    }
+  }, [avatarUploadFile])
+
+  const handleToggleFollow = useCallback(async () => {
+    if (!profileData?.profile?.UserId || profileData.isCurrentUser) return
+
+    try {
+      if (profileData.isFollowing) {
+        await unfollowUser(profileData.profile.UserId)
+      } else {
+        await followUser(profileData.profile.UserId)
+      }
+
+      const refreshed = await getProfile(profileData.profile.UserId)
+      setProfileData(refreshed)
+    } catch (error) {
+      console.error("Failed to update follow state:", error)
+    }
+  }, [profileData])
+
+  const handleAdminEditReview = useCallback(
+    async (review) => {
+      const nextRating = window.prompt("Update rating (1-5)", String(review.Rating || 5))
+      if (nextRating == null) return
+
+      const nextComment = window.prompt("Update comment", review.Comment || "")
+      if (nextComment == null) return
+
+      try {
+        await updateAdminReview(review.ReviewId, {
+          rating: Number(nextRating),
+          comment: nextComment
+        })
+        if (detailBook) {
+          const data = await getBookReviews(detailBook.BookId)
+          setDetailReviews(data.reviews || [])
+          setReviewSummary(data.summary || { reviewCount: 0, averageRating: 0 })
+        }
+      } catch (error) {
+        console.error("Failed to update review:", error)
+      }
+    },
+    [detailBook]
+  )
+
+  const handleAdminDeleteReview = useCallback(
+    async (review) => {
+      const confirmed = window.confirm("Delete this review?")
+      if (!confirmed) return
+
+      try {
+        await deleteAdminReview(review.ReviewId)
+        if (detailBook) {
+          const data = await getBookReviews(detailBook.BookId)
+          setDetailReviews(data.reviews || [])
+          setReviewSummary(data.summary || { reviewCount: 0, averageRating: 0 })
+        }
+      } catch (error) {
+        console.error("Failed to delete review:", error)
+      }
+    },
+    [detailBook]
+  )
+
   const closeBook = () => {
     resetReaderState()
     setCurrentPageView(readerReturnPage || "library")
@@ -403,7 +855,7 @@ function App() {
 
   const closeBookDetails = () => {
     setDetailBook(null)
-    setCurrentPageView(readerReturnPage || "home")
+    setCurrentPageView(readerReturnPage || "library")
   }
 
   const handleAuthSuccess = (user) => {
@@ -494,6 +946,16 @@ function App() {
       .slice(0, 4)
   }, [books])
 
+  const myListActiveBooks = useMemo(
+    () => myListBooks.filter((book) => formatPercent(book.progress?.Percentage) < 100),
+    [myListBooks]
+  )
+
+  const myListCompletedBooks = useMemo(
+    () => myListBooks.filter((book) => formatPercent(book.progress?.Percentage) >= 100),
+    [myListBooks]
+  )
+
   if (!currentUser) {
     return (
       <div className="app-shell auth-shell">
@@ -533,6 +995,36 @@ function App() {
               Library
             </button>
 
+            <button
+              className={`secondary-btn ${currentPageView === "my-list" ? "active-tab" : ""}`}
+              onClick={() => {
+                setDetailBook(null)
+                setCurrentPageView("my-list")
+              }}
+              type="button"
+            >
+              My List
+            </button>
+
+            <button
+              className={`secondary-btn ${currentPageView === "community" ? "active-tab" : ""}`}
+              onClick={() => {
+                setDetailBook(null)
+                setCurrentPageView("community")
+              }}
+              type="button"
+            >
+              Community
+            </button>
+
+            <button
+              className={`secondary-btn ${currentPageView === "profile" ? "active-tab" : ""}`}
+              onClick={() => openProfilePage(currentUser.userId)}
+              type="button"
+            >
+              Profile
+            </button>
+
             {currentUser.role === "admin" && (
               <button
                 className={`secondary-btn ${currentPageView === "admin" ? "active-tab" : ""}`}
@@ -559,6 +1051,596 @@ function App() {
 
       {currentPageView === "admin" && currentUser.role === "admin" && (
         <AdminPanel currentUser={currentUser} onLibraryRefresh={fetchBooks} />
+      )}
+
+      {currentPageView === "my-list" && !selectedBook && (
+        <div className="my-list-page">
+          <div className="section-header">
+            <div>
+              <div className="eyebrow-text">Personal Shelf</div>
+              <h2 className="section-title">My List</h2>
+            </div>
+          </div>
+
+          {myListBooks.length === 0 ? (
+            <div className="empty-state">
+              <p>Your list is empty right now.</p>
+            </div>
+          ) : (
+            <>
+              <section className="my-list-section">
+                <div className="section-header">
+                  <div>
+                    <h3 className="community-title">Reading Queue</h3>
+                    <p className="section-subtitle">Books you still want to read or finish.</p>
+                  </div>
+                </div>
+
+                {myListActiveBooks.length === 0 ? (
+                  <div className="empty-state">
+                    <p>No active books in your list right now.</p>
+                  </div>
+                ) : (
+                  <div className="home-card-grid">
+                    {myListActiveBooks.map((book) => (
+                      <article key={book.BookId} className="home-library-card">
+                        <div className="home-library-cover">
+                          <BookCover book={book} />
+                        </div>
+
+                        <div className="home-library-body">
+                          <h3>{book.Title}</h3>
+                          <p>{book.Author || "Unknown"}</p>
+                          <div className="home-library-actions">
+                            <button
+                              className="primary-btn"
+                              onClick={() => openBook(book, "my-list")}
+                              type="button"
+                            >
+                              {formatPercent(book.progress?.Percentage) > 0
+                                ? "Resume Reading"
+                                : "Read Book"}
+                            </button>
+                            <button
+                              className="secondary-btn"
+                              onClick={() => openBookDetails(book, "my-list")}
+                              type="button"
+                            >
+                              Details
+                            </button>
+                            <button
+                              className="secondary-btn"
+                              onClick={() => handleToggleMyList(book)}
+                              type="button"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="my-list-section">
+                <div className="section-header">
+                  <div>
+                    <h3 className="community-title">Read Books</h3>
+                    <p className="section-subtitle">Books you have fully completed.</p>
+                  </div>
+                </div>
+
+                {myListCompletedBooks.length === 0 ? (
+                  <div className="empty-state">
+                    <p>You have not completed any books in My List yet.</p>
+                  </div>
+                ) : (
+                  <div className="home-card-grid">
+                    {myListCompletedBooks.map((book) => (
+                      <article key={book.BookId} className="home-library-card">
+                        <div className="home-library-cover">
+                          <BookCover book={book} />
+                        </div>
+
+                        <div className="home-library-body">
+                          <h3>{book.Title}</h3>
+                          <p>{book.Author || "Unknown"}</p>
+                          <div className="home-library-actions">
+                            <button
+                              className="secondary-btn"
+                              onClick={() => openBookDetails(book, "my-list")}
+                              type="button"
+                            >
+                              View Details
+                            </button>
+                            <button
+                              className="secondary-btn"
+                              onClick={() => handleToggleMyList(book)}
+                              type="button"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </div>
+      )}
+
+      {currentPageView === "community" && !selectedBook && (
+        <div className="community-page">
+          <div className="section-header">
+            <div>
+              <div className="eyebrow-text">Reader Community</div>
+              <h2 className="section-title">Activity and Leaderboards</h2>
+            </div>
+          </div>
+
+          {communityLoading ? (
+            <p className="message-text">Loading community...</p>
+          ) : (
+            <div className="community-layout">
+              <section className="community-card">
+                <h3 className="community-title">Reading Feed</h3>
+                <div className="community-feed">
+                  {communityFeed.map((activity) => (
+                    <button
+                      key={activity.ActivityId}
+                      className="community-feed-item"
+                      onClick={() => openProfilePage(activity.UserId)}
+                      type="button"
+                    >
+                      <div className="community-feed-head">
+                        <div className="community-avatar">
+                          {(activity.AvatarImagePath || activity.AvatarUrl) ? (
+                            <img
+                              alt={getUserDisplayName(activity, activity.Email)}
+                              src={
+                                activity.AvatarImagePath
+                                  ? `${API_BASE}/profiles/${activity.UserId}/avatar?v=${encodeURIComponent(
+                                      activity.ProfileUpdatedAt || activity.AvatarImagePath || "avatar"
+                                    )}`
+                                  : activity.AvatarUrl
+                              }
+                            />
+                          ) : (
+                            <span>
+                              {(activity.DisplayName || activity.Email || "R").slice(0, 1)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="community-feed-copy">
+                          <strong className={(activity.Role || "").toLowerCase() === "admin" ? "staff-name" : ""}>
+                            {renderDisplayName(
+                              getUserDisplayName(activity, activity.Email),
+                              activity.Role,
+                              activity.LeaderboardRank
+                            )}
+                          </strong>
+                          <div className={`table-subtext level-chip ${getLevelToneClass(activity.Level)}`}>
+                            LV {activity.Level || 1}
+                          </div>
+                          {activity.ActiveTitle?.label ? (
+                            <div
+                              className={`table-subtext prestige-title title-chip ${getTitleToneClass(
+                                activity.ActiveTitle.code
+                              )}`}
+                            >
+                              <span>{getTitleIcon(activity.ActiveTitle)}</span>
+                              <span>{activity.ActiveTitle.label}</span>
+                            </div>
+                          ) : (
+                            <div className="table-subtext prestige-title">
+                              {getPrestigeTitle(activity.Level)}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <span>{formatActivityMessage(activity)}</span>
+                      <small>{formatDate(activity.CreatedAt)}</small>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="community-card">
+                <h3 className="community-title">Top Readers</h3>
+                <div className="leaderboard-list">
+                  {leaderboard.map((entry, index) => (
+                    <button
+                      key={entry.userId}
+                      className="leaderboard-item"
+                      onClick={() => openProfilePage(entry.userId)}
+                      type="button"
+                    >
+                      <div className="leaderboard-main">
+                        <div className="community-avatar">
+                          {(entry.avatarImagePath || entry.avatarUrl) ? (
+                            <img
+                              alt={entry.displayName}
+                              src={
+                                entry.avatarImagePath
+                                  ? `${API_BASE}/profiles/${entry.userId}/avatar?v=${encodeURIComponent(
+                                      entry.profileUpdatedAt || entry.avatarImagePath || "avatar"
+                                    )}`
+                                  : entry.avatarUrl
+                              }
+                            />
+                          ) : (
+                            <span>{(entry.displayName || "R").slice(0, 1)}</span>
+                          )}
+                        </div>
+                        <div className="leaderboard-copy">
+                          <strong>
+                            <span className="leaderboard-rank">#{index + 1}</span>
+                            <span className={(entry.role || "").toLowerCase() === "admin" ? "staff-name" : ""}>
+                              {renderDisplayName(entry.displayName, entry.role, index + 1)}
+                            </span>
+                          </strong>
+                          <div className="leaderboard-meta-row">
+                            <span className={`level-chip ${getLevelToneClass(entry.level)}`}>
+                              LV {entry.level || 1}
+                            </span>
+                            <span>{entry.experiencePoints || 0} XP</span>
+                          </div>
+                          {entry.activeTitle?.label ? (
+                            <div
+                              className={`table-subtext prestige-title title-chip ${getTitleToneClass(
+                                entry.activeTitle.code
+                              )}`}
+                            >
+                              <span>{getTitleIcon(entry.activeTitle)}</span>
+                              <span>{entry.activeTitle.label}</span>
+                            </div>
+                          ) : (
+                            <div className="table-subtext prestige-title">
+                              {getPrestigeTitle(entry.level)}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <small>{entry.completedBooks} finished</small>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </div>
+          )}
+        </div>
+      )}
+
+      {currentPageView === "profile" && !selectedBook && (
+        <div className="profile-page">
+          {profileLoading || !profileData ? (
+            <p className="message-text">Loading profile...</p>
+          ) : (
+            <>
+              <section className="profile-hero">
+                <div className="profile-avatar">
+                  {getProfileAvatarSrcWithCache(profileData.profile) ? (
+                    <img
+                      alt={profileData.profile?.DisplayName || "Profile avatar"}
+                      className="profile-avatar-image"
+                      src={getProfileAvatarSrcWithCache(profileData.profile)}
+                    />
+                  ) : (
+                    <span>
+                      {(profileData.profile?.DisplayName || profileData.profile?.Email || "R")
+                        .slice(0, 1)
+                        .toUpperCase()}
+                    </span>
+                  )}
+                </div>
+
+                <div className="profile-summary">
+                  <div className="eyebrow-text">
+                    {profileData.isCurrentUser ? "Your Profile" : "Reader Profile"}
+                  </div>
+                  <h2 className="detail-title">
+                    <span
+                      className={
+                        (profileData.profile?.Role || "").toLowerCase() === "admin"
+                          ? "staff-name"
+                          : ""
+                      }
+                    >
+                      {renderDisplayName(
+                        profileData.profile?.DisplayName || profileData.profile?.Email,
+                        profileData.profile?.Role,
+                        profileData.stats?.leaderboardRank
+                      )}
+                    </span>
+                  </h2>
+                  <p className="detail-author">{profileData.profile?.Bio || "No bio yet."}</p>
+                  <div className="profile-meta-row">
+                    <span className={`level-chip ${getLevelToneClass(profileData.level?.level)}`}>
+                      Level {profileData.level?.level || 1}
+                    </span>
+                    <span
+                      className={`prestige-title-chip title-chip ${getTitleToneClass(
+                        profileData.activeTitle?.code
+                      )}`}
+                    >
+                      <span>{getTitleIcon(profileData.activeTitle)}</span>
+                      <span>
+                        {profileData.activeTitle?.label || getPrestigeTitle(profileData.level?.level)}
+                      </span>
+                    </span>
+                    {profileData.stats?.leaderboardRank ? (
+                      <span>
+                        Rank #{profileData.stats.leaderboardRank}
+                      </span>
+                    ) : null}
+                    <span>{profileData.stats.followersCount} followers</span>
+                    <span>{profileData.stats.followingCount} following</span>
+                    <span>{profileData.stats.currentStreak} day streak</span>
+                  </div>
+
+                  <div className="level-progress-card">
+                    <div className="book-progress-header">
+                      <span>Level progress</span>
+                      <span>
+                        {profileData.level?.currentXpIntoLevel || 0}/
+                        {profileData.level?.nextLevelXp || 100} XP
+                      </span>
+                    </div>
+                    <div className="book-progress-bar">
+                      <div
+                        className="book-progress-fill"
+                        style={{ width: `${profileData.level?.progressPercent || 0}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {!profileData.isCurrentUser && (
+                    <button className="primary-btn" onClick={handleToggleFollow} type="button">
+                      {profileData.isFollowing ? "Unfollow" : "Follow"}
+                    </button>
+                  )}
+
+                  {profileData.isCurrentUser && (
+                    <button
+                      className="secondary-btn"
+                      onClick={() => setProfileEditorOpen((current) => !current)}
+                      type="button"
+                    >
+                      {profileEditorOpen ? "Close Profile Settings" : "Customize Profile"}
+                    </button>
+                  )}
+                </div>
+              </section>
+
+              <div className="profile-grid">
+                <section className="community-card">
+                  <h3 className="community-title">Badges</h3>
+                  <div className="badge-grid">
+                    {(profileData.badges || []).map((badge) => (
+                      <div key={badge.code} className="badge-card">
+                        <div className="badge-icon">{getBadgeIcon(badge.icon)}</div>
+                        <strong>{badge.label}</strong>
+                        <span>{badge.description}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="detail-stats">
+                    <div className="detail-stat">
+                      <span>Current streak</span>
+                      <strong>{profileData.stats.currentStreak} days</strong>
+                    </div>
+                    <div className="detail-stat">
+                      <span>Best streak</span>
+                      <strong>{profileData.stats.bestStreak} days</strong>
+                    </div>
+                    <div className="detail-stat">
+                      <span>Completed books</span>
+                      <strong>{profileData.stats.completedBooks}</strong>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="community-card">
+                  <h3 className="community-title">Goals and Rewards</h3>
+                  <div className="challenge-list">
+                    {(profileData.challenges || []).map((challenge) => (
+                      <div key={challenge.code} className="challenge-card">
+                        <strong>{challenge.title}</strong>
+                        <span>{challenge.description}</span>
+                        <div className="book-progress-bar">
+                          <div
+                            className="book-progress-fill"
+                            style={{
+                              width: `${challenge.target ? (challenge.progress / challenge.target) * 100 : 0}%`
+                            }}
+                          />
+                        </div>
+                        <small>
+                          {challenge.progress}/{challenge.target}
+                        </small>
+                        <small className="challenge-reward">
+                          Reward: +{challenge.xpReward} XP
+                          {challenge.rewarded ? " • Claimed" : challenge.completed ? " • Ready" : ""}
+                        </small>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="community-card">
+                  <h3 className="community-title">Recent Activity</h3>
+                  <div className="community-feed">
+                    {(profileData.recentActivity || []).map((activity) => (
+                      <div key={activity.ActivityId} className="community-feed-item static-feed-item">
+                        <strong className={(activity.Role || "").toLowerCase() === "admin" ? "staff-name" : ""}>
+                          {formatActivityMessage(activity)}
+                        </strong>
+                        <small>{formatDate(activity.CreatedAt)}</small>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
+
+              {profileData.isCurrentUser && profileEditorOpen && (
+                <div className="profile-grid">
+                  <section className="community-card">
+                    <h3 className="community-title">Customize Profile</h3>
+                    <div className="admin-form">
+                      <input
+                        className="input"
+                        placeholder="Display name"
+                        value={profileForm.displayName}
+                        onChange={(e) =>
+                          setProfileForm((current) => ({
+                            ...current,
+                            displayName: e.target.value
+                          }))
+                        }
+                      />
+                      <textarea
+                        className="textarea"
+                        placeholder="Bio"
+                        value={profileForm.bio}
+                        onChange={(e) =>
+                          setProfileForm((current) => ({
+                            ...current,
+                            bio: e.target.value
+                          }))
+                        }
+                      />
+                      <input
+                        className="input"
+                        placeholder="Avatar image URL"
+                        value={profileForm.avatarUrl}
+                        onChange={(e) =>
+                          setProfileForm((current) => ({
+                            ...current,
+                            avatarUrl: e.target.value
+                          }))
+                        }
+                      />
+                      <div className="file-field">
+                        <label className="file-label" htmlFor="avatar-upload">
+                          Upload profile photo
+                        </label>
+                        <input
+                          id="avatar-upload"
+                          className="file-input"
+                          type="file"
+                          accept=".jpg,.jpeg,.png,.webp,image/*"
+                          onChange={(e) => setAvatarUploadFile(e.target.files?.[0] || null)}
+                        />
+                        <button
+                          className="secondary-btn"
+                          onClick={handleUploadAvatar}
+                          disabled={!avatarUploadFile}
+                          type="button"
+                        >
+                          Upload Avatar
+                        </button>
+                      </div>
+                      <select
+                        className="toolbar-select"
+                        value={profileForm.selectedTitle}
+                        onChange={(e) =>
+                          setProfileForm((current) => ({
+                            ...current,
+                            selectedTitle: e.target.value
+                          }))
+                        }
+                      >
+                        <option value="">Choose an unlocked title</option>
+                        {(profileData.unlockedTitles || []).map((title) => (
+                          <option key={title.code} value={title.code}>
+                            {getTitleIcon(title)} {title.label}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        className="input"
+                        placeholder="Favorite genres"
+                        value={profileForm.favoriteGenres}
+                        onChange={(e) =>
+                          setProfileForm((current) => ({
+                            ...current,
+                            favoriteGenres: e.target.value
+                          }))
+                        }
+                      />
+                      <input
+                        className="input"
+                        placeholder="Favorite book"
+                        value={profileForm.favoriteBook}
+                        onChange={(e) =>
+                          setProfileForm((current) => ({
+                            ...current,
+                            favoriteBook: e.target.value
+                          }))
+                        }
+                      />
+                      <button className="primary-btn" onClick={handleSaveProfile} type="button">
+                        Save Profile
+                      </button>
+                    </div>
+                  </section>
+
+                  <section className="community-card">
+                    <h3 className="community-title">Reading Goals</h3>
+                    <div className="admin-form">
+                      <div className="goal-summary-grid">
+                        <div className="detail-stat">
+                          <span>Active days this week</span>
+                          <strong>{profileData.stats.activeDaysThisWeek}</strong>
+                        </div>
+                        <div className="detail-stat">
+                          <span>Books completed this month</span>
+                          <strong>{profileData.stats.completedThisMonth}</strong>
+                        </div>
+                      </div>
+                      <input
+                        className="input"
+                        type="number"
+                        min="1"
+                        value={goalForm.weeklyReadingDaysGoal}
+                        onChange={(e) =>
+                          setGoalForm((current) => ({
+                            ...current,
+                            weeklyReadingDaysGoal: e.target.value
+                          }))
+                        }
+                      />
+                      <input
+                        className="input"
+                        type="number"
+                        min="1"
+                        value={goalForm.monthlyBooksGoal}
+                        onChange={(e) =>
+                          setGoalForm((current) => ({
+                            ...current,
+                            monthlyBooksGoal: e.target.value
+                          }))
+                        }
+                      />
+                      <p className="section-subtitle">
+                        Weekly days goal tracks how many separate days you read in a rolling 7 day
+                        window. Monthly books goal tracks completed books this calendar month.
+                      </p>
+                      <button className="primary-btn" onClick={handleSaveGoals} type="button">
+                        Save Goals
+                      </button>
+                    </div>
+                  </section>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       )}
 
       {currentPageView === "detail" && detailBook && !selectedBook && (
@@ -612,6 +1694,153 @@ function App() {
                 >
                   Browse Library
                 </button>
+                <button
+                  className="secondary-btn"
+                  onClick={() => handleToggleMyList(detailBook)}
+                  type="button"
+                >
+                  {myListBooks.some((book) => book.BookId === detailBook.BookId)
+                    ? "Remove From My List"
+                    : "Add To My List"}
+                </button>
+              </div>
+
+              <div className="community-card detail-community-card">
+                <div className="section-header">
+                  <div>
+                    <h3 className="community-title">Ratings and Comments</h3>
+                    <p className="admin-modal-subtitle">
+                      {reviewSummary.reviewCount} reviews |{" "}
+                      {formatAverageRating(reviewSummary.averageRating)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="admin-form">
+                  <label className="reader-setting">
+                    <span>Your rating</span>
+                    <select
+                      className="input"
+                      value={reviewDraft.rating}
+                      onChange={(e) =>
+                        setReviewDraft((current) => ({
+                          ...current,
+                          rating: Number(e.target.value)
+                        }))
+                      }
+                    >
+                      <option value="5">5</option>
+                      <option value="4">4</option>
+                      <option value="3">3</option>
+                      <option value="2">2</option>
+                      <option value="1">1</option>
+                    </select>
+                  </label>
+                  <textarea
+                    className="textarea"
+                    placeholder="Leave a comment"
+                    value={reviewDraft.comment}
+                    onChange={(e) =>
+                      setReviewDraft((current) => ({
+                        ...current,
+                        comment: e.target.value
+                      }))
+                    }
+                  />
+                  <button className="primary-btn" onClick={handleSaveReview} type="button">
+                    Save Review
+                  </button>
+                </div>
+
+                {reviewLoading ? (
+                  <p className="message-text">Loading reviews...</p>
+                ) : (
+                  <div className="review-list">
+                    {detailReviews.map((review) => (
+                      <article key={review.ReviewId} className="review-card">
+                        <div className="review-card-header">
+                          <div className="review-author-block">
+                            <div className="community-avatar community-avatar-sm">
+                              {(review.AvatarImagePath || review.AvatarUrl) ? (
+                                <img
+                                  alt={getUserDisplayName(review, review.Email)}
+                                  src={getProfileAvatarSrcWithCache(review)}
+                                />
+                              ) : (
+                                <span>{getUserDisplayName(review, review.Email).slice(0, 1)}</span>
+                              )}
+                            </div>
+                            <button
+                              className="text-btn"
+                              onClick={() => openProfilePage(review.UserId)}
+                              type="button"
+                            >
+                              <span className={(review.Role || "").toLowerCase() === "admin" ? "staff-name" : ""}>
+                                {renderDisplayName(
+                                  getUserDisplayName(review, review.Email),
+                                  review.Role,
+                                  review.LeaderboardRank
+                                )}
+                              </span>
+                            </button>
+                            {review.Level ? (
+                              <div className={`table-subtext level-chip ${getLevelToneClass(review.Level)}`}>
+                                LV {review.Level}
+                              </div>
+                            ) : null}
+                            {review.ActiveTitle?.label ? (
+                              <div
+                                className={`table-subtext prestige-title title-chip ${getTitleToneClass(
+                                  review.ActiveTitle.code
+                                )}`}
+                              >
+                                <span>{getTitleIcon(review.ActiveTitle)}</span>
+                                <span>{review.ActiveTitle.label}</span>
+                              </div>
+                            ) : (
+                              <div className="table-subtext prestige-title">
+                                {getPrestigeTitle(review.Level)}
+                              </div>
+                            )}
+                          </div>
+                          <strong>{review.Rating}/5</strong>
+                        </div>
+                        <p>{review.Comment || "No comment left."}</p>
+                        <div className="review-card-footer">
+                          <small>{formatDate(review.UpdatedAt)}</small>
+                          <div className="admin-actions">
+                            <button
+                              className="secondary-btn"
+                              onClick={() => handleHelpfulVote(review.ReviewId)}
+                              type="button"
+                            >
+                              {review.HelpfulByCurrentUser ? "Unmark Helpful" : "Helpful"} (
+                              {review.HelpfulCount || 0})
+                            </button>
+                            {currentUser.role === "admin" && (
+                              <>
+                                <button
+                                  className="secondary-btn"
+                                  onClick={() => handleAdminEditReview(review)}
+                                  type="button"
+                                >
+                                  Edit Review
+                                </button>
+                                <button
+                                  className="danger-btn"
+                                  onClick={() => handleAdminDeleteReview(review)}
+                                  type="button"
+                                >
+                                  Delete Review
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -682,37 +1911,6 @@ function App() {
             </div>
           )}
 
-          <div className="library-toolbar">
-            <input
-              className="input toolbar-input"
-              type="text"
-              placeholder="Search by title, author, or description..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-
-            <select
-              className="input toolbar-select"
-              value={formatFilter}
-              onChange={(e) => setFormatFilter(e.target.value)}
-            >
-              <option value="all">All formats</option>
-              <option value="pdf">PDF</option>
-              <option value="epub">EPUB</option>
-            </select>
-
-            <select
-              className="input toolbar-select"
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-            >
-              <option value="recent">Recently active</option>
-              <option value="title">Title A-Z</option>
-              <option value="author">Author A-Z</option>
-              <option value="progress">Highest progress</option>
-            </select>
-          </div>
-
           {continueReadingBooks.length > 0 && (
             <div className="continue-section">
               <div className="section-header">
@@ -779,6 +1977,37 @@ function App() {
               </div>
             </div>
           )}
+
+          <div className="library-toolbar">
+            <input
+              className="input toolbar-input"
+              type="text"
+              placeholder="Search by title, author, or description..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+
+            <select
+              className="input toolbar-select"
+              value={formatFilter}
+              onChange={(e) => setFormatFilter(e.target.value)}
+            >
+              <option value="all">All formats</option>
+              <option value="pdf">PDF</option>
+              <option value="epub">EPUB</option>
+            </select>
+
+            <select
+              className="input toolbar-select"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+            >
+              <option value="recent">Recently active</option>
+              <option value="title">Title A-Z</option>
+              <option value="author">Author A-Z</option>
+              <option value="progress">Highest progress</option>
+            </select>
+          </div>
 
           <div>
             <div className="section-header">

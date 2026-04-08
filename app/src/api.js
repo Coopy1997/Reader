@@ -279,6 +279,12 @@ export async function getAdminUsers() {
   })
 }
 
+export async function getAdminBadges() {
+  return requestJson("/admin/badges", {
+    headers: getAuthHeaders()
+  })
+}
+
 export async function updateAdminUserRole(userId, role) {
   return requestJson(`/admin/users/${userId}/role`, {
     method: "PUT",
@@ -287,5 +293,167 @@ export async function updateAdminUserRole(userId, role) {
       ...getAuthHeaders()
     },
     body: JSON.stringify({ role })
+  })
+}
+
+export async function updateAdminUserGamification(userId, payload) {
+  return requestJson(`/admin/users/${userId}/gamification`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
+    body: JSON.stringify(payload)
+  })
+}
+
+export async function grantAdminBadge(userId, badgeCode) {
+  return requestJson(`/admin/users/${userId}/badges`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
+    body: JSON.stringify({ badgeCode })
+  })
+}
+
+export async function revokeAdminBadge(userId, badgeCode) {
+  return requestJson(`/admin/users/${userId}/badges/${encodeURIComponent(badgeCode)}`, {
+    method: "DELETE",
+    headers: getAuthHeaders()
+  })
+}
+
+export async function getMyProfile() {
+  return requestJson("/profile/me", {
+    headers: getAuthHeaders()
+  })
+}
+
+export async function updateMyProfile(payload) {
+  return requestJson("/profile/me", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
+    body: JSON.stringify(payload)
+  })
+}
+
+export async function uploadMyAvatar(file) {
+  const formData = new FormData()
+  formData.append("avatar", file)
+
+  return requestJson("/profile/me/avatar", {
+    method: "PUT",
+    headers: getAuthHeaders(),
+    body: formData
+  })
+}
+
+export async function updateMyGoals(payload) {
+  return requestJson("/profile/me/goals", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
+    body: JSON.stringify(payload)
+  })
+}
+
+export async function getProfile(userId) {
+  return requestJson(`/profiles/${userId}`, {
+    headers: getAuthHeaders()
+  })
+}
+
+export async function getMyList() {
+  return requestJson("/my-list", {
+    headers: getAuthHeaders()
+  })
+}
+
+export async function addBookToMyList(bookId) {
+  return requestJson(`/books/${bookId}/my-list`, {
+    method: "POST",
+    headers: getAuthHeaders()
+  })
+}
+
+export async function removeBookFromMyList(bookId) {
+  return requestJson(`/books/${bookId}/my-list`, {
+    method: "DELETE",
+    headers: getAuthHeaders()
+  })
+}
+
+export async function getBookReviews(bookId) {
+  return requestJson(`/books/${bookId}/reviews`, {
+    headers: getAuthHeaders()
+  })
+}
+
+export async function saveBookReview(bookId, payload) {
+  return requestJson(`/books/${bookId}/reviews`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
+    body: JSON.stringify(payload)
+  })
+}
+
+export async function updateAdminReview(reviewId, payload) {
+  return requestJson(`/admin/reviews/${reviewId}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
+    body: JSON.stringify(payload)
+  })
+}
+
+export async function deleteAdminReview(reviewId) {
+  return requestJson(`/admin/reviews/${reviewId}`, {
+    method: "DELETE",
+    headers: getAuthHeaders()
+  })
+}
+
+export async function toggleHelpfulVote(reviewId) {
+  return requestJson(`/reviews/${reviewId}/helpful`, {
+    method: "POST",
+    headers: getAuthHeaders()
+  })
+}
+
+export async function followUser(userId) {
+  return requestJson(`/users/${userId}/follow`, {
+    method: "POST",
+    headers: getAuthHeaders()
+  })
+}
+
+export async function unfollowUser(userId) {
+  return requestJson(`/users/${userId}/follow`, {
+    method: "DELETE",
+    headers: getAuthHeaders()
+  })
+}
+
+export async function getCommunityFeed() {
+  return requestJson("/community/feed", {
+    headers: getAuthHeaders()
+  })
+}
+
+export async function getLeaderboard() {
+  return requestJson("/community/leaderboard", {
+    headers: getAuthHeaders()
   })
 }

@@ -3,16 +3,43 @@ import AdminUploadForm from "./AdminUploadForm"
 import BookCover from "./BookCover"
 import {
   deleteAdminBook,
+  getAdminBadges,
   getAdminBookReaders,
   getAdminBooks,
   getAdminUsers,
+  getProfile,
+  grantAdminBadge,
   replaceAdminBookFile,
   replaceAdminCover,
   runAdminBulkAction,
   updateAdminBook,
   updateAdminBookSettings,
-  updateAdminUserRole
+  updateAdminUserGamification,
+  updateAdminUserRole,
+  revokeAdminBadge
 } from "./api"
+
+const BADGE_ICON_MAP = {
+  book: "📘",
+  medal: "🏅",
+  chat: "💬",
+  bookmark: "🔖",
+  flame: "🔥",
+  crown: "👑",
+  people: "👥",
+  spark: "✨",
+  staff: "🛡️",
+  rocket: "🚀",
+  dragon: "🐉",
+  legend: "🌟",
+  gem: "💎",
+  lightning: "⚡",
+  trophy: "🏆"
+}
+
+function getBadgeIcon(icon) {
+  return BADGE_ICON_MAP[icon] || "★"
+}
 
 function formatDate(dateValue) {
   if (!dateValue) return "No activity yet"
@@ -76,6 +103,20 @@ function formatSavedPosition(reader, fallbackFileType) {
   return `Page ${reader.ProgressValue}`
 }
 
+function calculateUserLevel(experiencePoints, bonusLevels) {
+  let xp = Math.max(0, Number(experiencePoints) || 0)
+  let level = 1
+  let threshold = 100
+
+  while (xp >= threshold) {
+    xp -= threshold
+    level += 1
+    threshold = 100 + (level - 1) * 40
+  }
+
+  return level + Math.max(0, Number(bonusLevels) || 0)
+}
+
 function sortBooks(books, adminSortBy) {
   const result = [...books]
 
@@ -130,6 +171,13 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
   const [adminActionLoading, setAdminActionLoading] = useState(false)
   const [showStatsPanel, setShowStatsPanel] = useState(false)
   const [showUploadPanel, setShowUploadPanel] = useState(false)
+  const [badgeCatalog, setBadgeCatalog] = useState([])
+  const [selectedUserProfile, setSelectedUserProfile] = useState(null)
+  const [selectedUserBadges, setSelectedUserBadges] = useState([])
+  const [selectedUserGamification, setSelectedUserGamification] = useState({
+    experiencePoints: 0,
+    bonusLevels: 0
+  })
 
   const fetchAdminBooks = useCallback(async () => {
     try {
@@ -173,6 +221,19 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
     fetchAdminBooks()
     fetchAdminUsers()
   }, [fetchAdminBooks, fetchAdminUsers])
+
+  useEffect(() => {
+    const loadBadges = async () => {
+      try {
+        const data = await getAdminBadges()
+        setBadgeCatalog(data.badges || [])
+      } catch (error) {
+        console.error("Failed to load badge catalog:", error)
+      }
+    }
+
+    loadBadges()
+  }, [])
 
   const filteredAdminBooks = useMemo(() => {
     const query = adminSearch.trim().toLowerCase()
@@ -465,6 +526,74 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
       setAdminActionLoading(false)
     }
   }
+
+  const openUserSettings = useCallback(async (user) => {
+    try {
+      setAdminActionLoading(true)
+      const data = await getProfile(user.UserId)
+      setSelectedUserProfile(data)
+      setSelectedUserBadges((data.badges || []).map((badge) => badge.code))
+      setSelectedUserGamification({
+        experiencePoints: data.profile?.ExperiencePoints || 0,
+        bonusLevels: data.profile?.BonusLevels || 0
+      })
+    } catch (error) {
+      window.alert(error.message || "Failed to load user profile")
+    } finally {
+      setAdminActionLoading(false)
+    }
+  }, [])
+
+  const closeUserSettings = useCallback(() => {
+    setSelectedUserProfile(null)
+    setSelectedUserBadges([])
+    setSelectedUserGamification({
+      experiencePoints: 0,
+      bonusLevels: 0
+    })
+  }, [])
+
+  const saveUserGamification = useCallback(async () => {
+    if (!selectedUserProfile?.profile?.UserId) return
+
+    try {
+      setAdminActionLoading(true)
+      await updateAdminUserGamification(selectedUserProfile.profile.UserId, selectedUserGamification)
+      const refreshed = await getProfile(selectedUserProfile.profile.UserId)
+      setSelectedUserProfile(refreshed)
+      setSelectedUserBadges((refreshed.badges || []).map((badge) => badge.code))
+      await fetchAdminUsers()
+    } catch (error) {
+      window.alert(error.message || "Failed to update XP and level")
+    } finally {
+      setAdminActionLoading(false)
+    }
+  }, [fetchAdminUsers, selectedUserGamification, selectedUserProfile])
+
+  const toggleUserBadge = useCallback(
+    async (badgeCode, hasBadge) => {
+      if (!selectedUserProfile?.profile?.UserId) return
+
+      try {
+        setAdminActionLoading(true)
+        if (hasBadge) {
+          await revokeAdminBadge(selectedUserProfile.profile.UserId, badgeCode)
+        } else {
+          await grantAdminBadge(selectedUserProfile.profile.UserId, badgeCode)
+        }
+
+        const refreshed = await getProfile(selectedUserProfile.profile.UserId)
+        setSelectedUserProfile(refreshed)
+        setSelectedUserBadges((refreshed.badges || []).map((badge) => badge.code))
+        await fetchAdminUsers()
+      } catch (error) {
+        window.alert(error.message || "Failed to update badge")
+      } finally {
+        setAdminActionLoading(false)
+      }
+    },
+    [fetchAdminUsers, selectedUserProfile]
+  )
 
   return (
     <div className="admin-overhaul">
@@ -829,6 +958,9 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
                     <tr>
                       <th>Email</th>
                       <th>Role</th>
+                      <th>Level</th>
+                      <th>XP</th>
+                      <th>Badges</th>
                       <th>Started Books</th>
                       <th>Completed</th>
                       <th>Last Activity</th>
@@ -853,6 +985,9 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
                               {user.Role}
                             </span>
                           </td>
+                          <td>{calculateUserLevel(user.ExperiencePoints, user.BonusLevels)}</td>
+                          <td>{user.ExperiencePoints || 0}</td>
+                          <td>{user.BadgeCount || 0}</td>
                           <td>{user.StartedBooks || 0}</td>
                           <td>{user.CompletedBooks || 0}</td>
                           <td>{formatDate(user.LastActivityAt)}</td>
@@ -877,6 +1012,14 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
                                   Promote to Admin
                                 </button>
                               )}
+                              <button
+                                className="secondary-btn"
+                                type="button"
+                                disabled={adminActionLoading}
+                                onClick={() => openUserSettings(user)}
+                              >
+                                Manage XP & Badges
+                              </button>
                             </div>
                           </td>
                         </tr>
@@ -885,7 +1028,7 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
 
                     {filteredUsers.length === 0 && (
                       <tr>
-                        <td colSpan="6" className="admin-empty-cell">
+                        <td colSpan="9" className="admin-empty-cell">
                           No users found.
                         </td>
                       </tr>
@@ -1079,6 +1222,110 @@ export default function AdminPanel({ currentUser, onLibraryRefresh }) {
                   ))}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedUserProfile && (
+        <div className="modal-overlay" onClick={closeUserSettings}>
+          <div
+            className="modal-card modal-card-wide admin-popout-card admin-badge-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="section-header">
+              <div>
+                <h3 className="section-title">Manage Reader Profile</h3>
+                <p className="admin-modal-subtitle">
+                  {selectedUserProfile.profile?.DisplayName || selectedUserProfile.profile?.Email}
+                </p>
+              </div>
+
+              <button className="secondary-btn" onClick={closeUserSettings} type="button">
+                Close
+              </button>
+            </div>
+
+            <div className="profile-grid">
+              <section className="community-card">
+                <h3 className="community-title">XP and Level</h3>
+                <div className="admin-form">
+                  <input
+                    className="input"
+                    type="number"
+                    min="0"
+                    value={selectedUserGamification.experiencePoints}
+                    onChange={(e) =>
+                      setSelectedUserGamification((current) => ({
+                        ...current,
+                        experiencePoints: e.target.value
+                      }))
+                    }
+                    placeholder="Experience points"
+                  />
+                  <input
+                    className="input"
+                    type="number"
+                    min="0"
+                    value={selectedUserGamification.bonusLevels}
+                    onChange={(e) =>
+                      setSelectedUserGamification((current) => ({
+                        ...current,
+                        bonusLevels: e.target.value
+                      }))
+                    }
+                    placeholder="Bonus levels"
+                  />
+                  <div className="admin-summary-chip-row">
+                    <div className="summary-chip">
+                      Live level:{" "}
+                      {calculateUserLevel(
+                        selectedUserGamification.experiencePoints,
+                        selectedUserGamification.bonusLevels
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    className="primary-btn"
+                    disabled={adminActionLoading}
+                    onClick={saveUserGamification}
+                    type="button"
+                  >
+                    Save XP & Level
+                  </button>
+                </div>
+              </section>
+
+              <section className="community-card">
+                <h3 className="community-title">Badges</h3>
+                <div className="admin-badge-scroll">
+                  <div className="badge-grid">
+                    {badgeCatalog.map((badge) => {
+                      const hasBadge = selectedUserBadges.includes(badge.code)
+
+                      return (
+                        <div key={badge.code} className="badge-card">
+                          <div className="badge-card-head">
+                            <div className="badge-icon" aria-hidden="true">
+                              {getBadgeIcon(badge.icon)}
+                            </div>
+                            <strong>{badge.label}</strong>
+                          </div>
+                          <span>{badge.description}</span>
+                          <button
+                            className={hasBadge ? "danger-btn" : "secondary-btn"}
+                            disabled={adminActionLoading}
+                            onClick={() => toggleUserBadge(badge.code, hasBadge)}
+                            type="button"
+                          >
+                            {hasBadge ? "Take Badge" : "Give Badge"}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
         </div>
